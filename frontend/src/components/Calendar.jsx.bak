@@ -5,8 +5,7 @@ const HOURS = ['8AM','9AM','10AM','11AM','12PM','1PM','2PM','3PM','4PM','5PM','6
 const GRID_START = 8 * 60;
 const GRID_END   = 26 * 60;   // 8AM → 2AM = 18 hour rows
 const TOTAL_MIN  = GRID_END - GRID_START; // 1080 min
-const ROW_PX     = 50;                     // must match CSS .cal-cell height
-const HEADER_PX  = 43;                     // approximate header height (set via CSS var too)
+const HOUR_ROWS  = HOURS.length;          // 18
 
 function toGridMin(t) {
   if (!t) return null;
@@ -51,12 +50,10 @@ export default function Calendar({ events, weekOffset, onSlotClick, onEventClick
     return d;
   }, [weekEvents]);
 
-  const GRID_H = HOURS.length * ROW_PX; // 18 * 50 = 900px — total event grid height
-
   return (
     <div className="calendar-wrap">
-      {/* ── The pure grid: header + hour rows only, no overlays ── */}
       <div className="calendar">
+        {/* ── Header row ── */}
         <div className="cal-header" style={{background:'#f8f5f0',color:'var(--text3)'}}>Time</div>
         {DAYS.map((day, i) => (
           <div key={i} className={`cal-header${isToday(dates[i])?' today':''}`}>
@@ -64,6 +61,7 @@ export default function Calendar({ events, weekOffset, onSlotClick, onEventClick
           </div>
         ))}
 
+        {/* ── Hour rows: time labels + clickable cells ── */}
         {HOURS.map((label, hi) => (
           <Fragment key={hi}>
             <div className="cal-time">{label}</div>
@@ -75,38 +73,42 @@ export default function Calendar({ events, weekOffset, onSlotClick, onEventClick
             ))}
           </Fragment>
         ))}
-      </div>
 
-      {/* ── Overlay layer: absolutely positioned on top of the grid ── */}
-      {/* Sits inside calendar-wrap; uses CSS to position over grid rows */}
-      <div className="cal-events-layer" style={{ height: GRID_H }}>
-        {/* Time-column spacer to align with 65px time label column */}
-        <div className="cal-events-time-spacer" />
-
-        {[0,1,2,3,4,5,6].map(di => (
-          <div key={di} className="cal-events-col" style={{ position: 'relative', flex: 1, height: '100%' }}>
-            {byDay[di].map(ev => {
-              const s = toGridMin(ev.start);
-              const e = toGridMin(ev.end);
-              if (s === null || e === null || e <= s) return null;
-              const top    = ((s - GRID_START) / TOTAL_MIN) * 100;
-              const height = Math.max(((e - s) / TOTAL_MIN) * 100, 1.5);
-              const bg     = ev.color || CAT_COLORS[ev.category] || '#f5e6d8';
-              const icon   = ev.icon  || CAT_ICONS[ev.category]  || '📌';
-              return (
-                <div key={ev.id}
-                  className="cal-event"
-                  style={{ top:`${top}%`, height:`${height}%`, background: bg }}
-                  onClick={e => { e.stopPropagation(); onEventClick(ev); }}
-                  title={`${ev.title} (${ev.start}–${ev.end})`}
-                >
-                  <div className="cal-event-title">{icon} {ev.title}</div>
-                  <div className="cal-event-time">{ev.start}–{ev.end}</div>
-                </div>
-              );
-            })}
-          </div>
-        ))}
+        {/* ── Event overlays: explicitly placed in the same rows as hour cells ── */}
+        {[0,1,2,3,4,5,6].map(di => {
+          if (!byDay[di].length) return null;
+          return (
+            <div
+              key={`ol-${di}`}
+              className="cal-overlay"
+              style={{
+                gridColumn: di + 2,
+                gridRow: `2 / span ${HOUR_ROWS}`,
+              }}
+            >
+              {byDay[di].map(ev => {
+                const s = toGridMin(ev.start);
+                const e = toGridMin(ev.end);
+                if (s === null || e === null || e <= s) return null;
+                const top = ((s - GRID_START) / TOTAL_MIN) * 100;
+                const h = Math.max(((e - s) / TOTAL_MIN) * 100, 1.5);
+                const bg = ev.color || CAT_COLORS[ev.category] || '#f5e6d8';
+                const icon = ev.icon || CAT_ICONS[ev.category] || '📌';
+                return (
+                  <div key={ev.id}
+                    className="cal-event"
+                    style={{ top:`${top}%`, height:`${h}%`, background:bg }}
+                    onClick={e => { e.stopPropagation(); onEventClick(ev); }}
+                    title={`${ev.title} (${ev.start}–${ev.end})`}
+                  >
+                    <div className="cal-event-title">{icon} {ev.title}</div>
+                    <div className="cal-event-time">{ev.start}–{ev.end}</div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
