@@ -149,9 +149,9 @@ export default function SettingsPanel({ onClose }) {
 
         {tab === 'notify' && (
           <div>
-            <h2 style={{fontSize:'1rem',marginBottom:'.5rem'}}>🔔 Notifications</h2>
+            <h2 style={{fontSize:'1rem',marginBottom:'.5rem'}}>🔔 Telegram Notifications</h2>
             <p style={{fontSize:'.8rem',color:'var(--text2)',marginBottom:'.8rem'}}>
-              Get notified before events start. Set per-event timing in the event editor.
+              Get notified via Telegram before events start. Set per-event timing in the event editor.
             </p>
             {notifySettings && (
               <form onSubmit={async e => {
@@ -159,8 +159,6 @@ export default function SettingsPanel({ onClose }) {
                 setSaved('');
                 try {
                   await updateNotifySettings({
-                    email: notifySettings.email,
-                    email_notify: notifySettings.email_notify,
                     telegram_notify: notifySettings.telegram_notify,
                     telegram_chat_id: notifySettings.telegram_chat_id,
                   });
@@ -168,18 +166,6 @@ export default function SettingsPanel({ onClose }) {
                   setTimeout(() => setSaved(''), 2000);
                 } catch(err) { setSaved('❌ ' + err.message); }
               }}>
-                <label>Email address</label>
-                <input type="email" value={notifySettings.email} onChange={e => setNotifySettings({...notifySettings, email: e.target.value})}
-                  placeholder="your@email.com" />
-                <div style={{display:'flex',alignItems:'center',gap:'.5rem',marginBottom:'.75rem'}}>
-                  <input type="checkbox" id="emailNotify" checked={notifySettings.email_notify}
-                    onChange={e => setNotifySettings({...notifySettings, email_notify: e.target.checked})}
-                    style={{width:'auto',marginBottom:0}} />
-                  <label htmlFor="emailNotify" style={{marginBottom:0}}>📧 Send email notifications</label>
-                </div>
-
-                <hr style={{border:'none',borderTop:'1px solid var(--border-light)',margin:'.5rem 0'}} />
-
                 <label>Telegram Chat ID</label>
                 <input type="text" value={notifySettings.telegram_chat_id} onChange={e => setNotifySettings({...notifySettings, telegram_chat_id: e.target.value})}
                   placeholder="Message @RandilTimely_bot to get your ID" />
@@ -187,15 +173,14 @@ export default function SettingsPanel({ onClose }) {
                   <input type="checkbox" id="tgNotify" checked={notifySettings.telegram_notify}
                     onChange={e => setNotifySettings({...notifySettings, telegram_notify: e.target.checked})}
                     style={{width:'auto',marginBottom:0}} />
-                  <label htmlFor="tgNotify" style={{marginBottom:0}}>🤖 Send Telegram notifications</label>
+                  <label htmlFor="tgNotify" style={{marginBottom:0}}>🤖 Enable Telegram notifications</label>
                 </div>
                 <div style={{fontSize:'.72rem',color:'var(--text3)',marginBottom:'.8rem'}}>
                   1. Open <a href="https://t.me/RandilTimely_bot" target="_blank" rel="noopener" style={{color:'var(--accent)'}}>@RandilTimely_bot</a><br/>
                   2. Send <strong>/start</strong> to the bot<br/>
                   3. Forward the chat ID you receive here
                 </div>
-
-                <button type="submit" className="btn btn-primary">Save Notification Settings</button>
+                <button type="submit" className="btn btn-primary">Save</button>
                 {saved && <span style={{marginLeft:'.5rem',fontSize:'.8rem',color:'var(--text)'}}>{saved}</span>}
               </form>
             )}
