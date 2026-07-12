@@ -1,37 +1,21 @@
-import os, uuid, html, sqlite3, threading, requests, time, re, logging, secrets
-from datetime import datetime, timedelta, timezone
-from flask import Flask, request, session, jsonify, Response
+import os
+from datetime import datetime
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__, static_folder='../frontend/dist', static_url_path='/')
-app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
-if 'SECRET_KEY' not in os.environ:
-    logging.warning("SECRET_KEY not set! Using random key — sessions will reset on restart.")
+app.secret_key = os.environ.get('SECRET_KEY', 'change-this-in-production')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'instance', 'timetable.db'
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
-app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # 2MB max request body
-
-ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', 'https://timely.randillasith.me,https://timetable.randillasith.me,http://localhost:5173').split(',')
-CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
+CORS(app, supports_credentials=True)
 
 db = SQLAlchemy(app)
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"],
-                  storage_uri="memory://")
-INSTANCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
-os.makedirs(INSTANCE_DIR, exist_ok=True)
 
-BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET', secrets.token_hex(16))
+os.makedirs(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance'), exist_ok=True)
 
 # ─── Models ───
 class User(db.Model):
@@ -40,49 +24,8 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     theme = db.Column(db.String(20), default='light')
-    email = db.Column(db.String(120), default='')
-    telegram_notify = db.Column(db.Boolean, default=False)
-    telegram_chat_id = db.Column(db.String(50), default='')
-    ical_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
-    share_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    is_admin = db.Column(db.Boolean, default=False)
-    timezone = db.Column(db.String(50), default='UTC')
-
-class BotState(db.Model):
-    __tablename__ = 'bot_state'
-    chat_id = db.Column(db.String(50), primary_key=True)
-    welcome_message_id = db.Column(db.Integer, default=None)
-
-class AppSettings(db.Model):
-    __tablename__ = 'app_settings'
-    key = db.Column(db.String(50), primary_key=True)
-    value = db.Column(db.Text, default='')
-
-class GlobalPreset(db.Model):
-    __tablename__ = 'global_presets'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), nullable=False)
-    color = db.Column(db.String(7), nullable=False, default='#c4956a')
-    icon = db.Column(db.String(10), nullable=False, default='📌')
-    sort_order = db.Column(db.Integer, default=0)
-
-class Announcement(db.Model):
-    __tablename__ = 'announcements'
-    id = db.Column(db.Integer, primary_key=True)
-    message = db.Column(db.Text, nullable=False)
-    type = db.Column(db.String(20), default='banner')  # banner | telegram
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    sent_at = db.Column(db.DateTime, default=None)
-
-class Category(db.Model):
-    __tablename__ = 'categories'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    name = db.Column(db.String(50), nullable=False)
-    color = db.Column(db.String(7), nullable=False, default='#c4956a')
-    icon = db.Column(db.String(10), nullable=False, default='📌')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    events = db.relationship('Event', backref='user', lazy=True, cascade='all, delete-orphan')
 
 class Event(db.Model):
     __tablename__ = 'events'
@@ -92,216 +35,33 @@ class Event(db.Model):
     title = db.Column(db.String(200), nullable=False)
     start_time = db.Column(db.String(5), nullable=False)
     end_time = db.Column(db.String(5), nullable=False)
-    category = db.Column(db.String(50), default='task')
+    category = db.Column(db.String(20), default='task')
     color = db.Column(db.String(7), default=None)
     note = db.Column(db.Text, default='')
-    repeat = db.Column(db.String(10), default='none')
-    notify_before = db.Column(db.Integer, default=None)
-    notified = db.Column(db.Boolean, default=False)
-    semester = db.Column(db.String(50), default='')
 
-# ─── Safe Migration ───
-def migrate_db():
-    """Add missing columns without losing data. Backs up DB first."""
-    db_path = os.path.join(INSTANCE_DIR, 'timetable.db')
-    if not os.path.exists(db_path):
-        db.create_all()
-        return
-
-    # Backup
-    backup_path = db_path + '.backup'
-    try:
-        import shutil
-        shutil.copy2(db_path, backup_path)
-        print(f"[Migration] Backed up to {backup_path}")
-    except Exception as e:
-        print(f"[Migration] Backup failed: {e}")
-
-    db.create_all()
-
-    # Get existing columns per table
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
-    model_columns = {
-        'users': [
-            ('email', 'VARCHAR(120)', "''"),
-            ('theme', 'VARCHAR(20)', 'light'),
-            ('telegram_notify', 'BOOLEAN', '0'),
-            ('telegram_chat_id', 'VARCHAR(50)', "''"),
-            ('ical_token', 'VARCHAR(36)', "''"),
-            ('share_token', 'VARCHAR(36)', "''"),
-            ('created_at', 'DATETIME', None),
-            ('is_admin', 'BOOLEAN', '0'),
-            ('timezone', 'VARCHAR(50)', "'UTC'"),
-        ],
-        'events': [
-            ('category', 'VARCHAR(50)', "'task'"),
-            ('color', 'VARCHAR(7)', 'NULL'),
-            ('note', 'TEXT', "''"),
-            ('repeat', 'VARCHAR(10)', "'none'"),
-            ('notify_before', 'INTEGER', 'NULL'),
-            ('notified', 'BOOLEAN', '0'),
-            ('semester', 'VARCHAR(50)', "''"),
-        ],
-        'categories': [
-            ('color', 'VARCHAR(7)', "'#c4956a'"),
-            ('icon', 'VARCHAR(10)', "'📌'"),
-        ],
-    }
-
-    for table, cols in model_columns.items():
-        cur.execute(f"PRAGMA table_info({table})")
-        existing = {row[1] for row in cur.fetchall()}
-        for col_name, col_type, default in cols:
-            if col_name not in existing:
-                try:
-                    sql = f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
-                    if default is not None:
-                        sql += f" DEFAULT {default}"
-                    cur.execute(sql)
-                    print(f"[Migration] Added {table}.{col_name}")
-                except Exception as e:
-                    print(f"[Migration] Could not add {table}.{col_name}: {e}")
-
-    conn.commit()
-    conn.close()
-    print("[Migration] Complete")
-
-# ─── Telegram Bot Helpers ───
-def telegram_send(chat_id, text, reply_markup=None):
-    if not chat_id or not BOT_TOKEN: return None
-    try:
-        payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
-        if reply_markup:
-            payload['reply_markup'] = reply_markup
-        r = requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
-        data = r.json()
-        if r.ok and data.get('ok') and data.get('result'):
-            return data['result']
-        return None
-    except Exception as e:
-        print(f"[Bot] send error: {e}")
-        return None
-
-def telegram_edit(chat_id, message_id, text):
-    if not chat_id or not message_id or not BOT_TOKEN: return False
-    try:
-        r = requests.post(f"{TELEGRAM_API}/editMessageText", json={
-            'chat_id': chat_id, 'message_id': message_id,
-            'text': text, 'parse_mode': 'HTML'
-        }, timeout=10)
-        return r.ok
-    except Exception as e:
-        print(f"[Bot] edit error: {e}")
-        return False
-
-def telegram_delete(chat_id, message_id):
-    if not chat_id or not message_id or not BOT_TOKEN: return False
-    try:
-        r = requests.post(f"{TELEGRAM_API}/deleteMessage", json={
-            'chat_id': chat_id, 'message_id': message_id
-        }, timeout=10)
-        return r.ok
-    except Exception as e:
-        print(f"[Bot] delete error: {e}")
-        return False
-
-# ─── Helpers ───
-def login_required():
-    if 'user_id' not in session: return None
-    return db.session.get(User, session['user_id'])
-
-def day_name(d):
-    return ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][d]
-
-# ─── Auth ───
+# ─── Auth Routes ───
 @app.route('/')
 def index():
     return app.send_static_file('index.html')
 
-SPA_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend', 'dist')
-
-@app.before_request
-def spa_fallback():
-    """Serve index.html for any non-API, non-file path (fixes white screen on refresh)."""
-    if request.method != 'GET':
-        return None
-    path = request.path.lstrip('/')
-    # Don't intercept API routes or share routes
-    if path.startswith('api/') or path.startswith('share/'):
-        return None
-    # If it's a real file (JS, CSS, etc.), let Flask handle it normally
-    filepath = os.path.join(SPA_DIST, path)
-    if os.path.isfile(filepath):
-        return None
-    # Everything else → serve index.html (SPA routing)
-    response = app.send_static_file('index.html')
-    response.headers['Cache-Control'] = 'no-store, must-revalidate'
-    return response
-
-@app.after_request
-def security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    return response
-
-# ─── Validation Helpers ───
-TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
-
-def validate_event_data(data, require_all=False):
-    """Validate event fields. Returns error string or None."""
-    if require_all:
-        if not data.get('title', '').strip():
-            return 'Title is required'
-        if data.get('day') is None:
-            return 'Day is required'
-    if 'day' in data:
-        try:
-            day = int(data['day'])
-            if day < 0 or day > 6:
-                return 'Day must be 0-6 (Mon-Sun)'
-        except (ValueError, TypeError):
-            return 'Invalid day value'
-    if 'start' in data and not TIME_RE.match(data['start']):
-        return 'Invalid start time format (use HH:MM)'
-    if 'end' in data and not TIME_RE.match(data['end']):
-        return 'Invalid end time format (use HH:MM)'
-    if 'repeat' in data and data['repeat'] not in ('none', 'weekly'):
-        return 'Invalid repeat value'
-    if 'color' in data and data['color']:
-        if not re.match(r'^#[0-9a-fA-F]{6}$', data['color']):
-            return 'Invalid color format (use #RRGGBB)'
-    return None
-
 @app.route('/api/register', methods=['POST'])
-@limiter.limit("5 per minute")
 def register():
     data = request.get_json()
     if not data: return jsonify({'error': 'Invalid request'}), 400
     username = data.get('username', '').strip()
     password = data.get('password', '')
-    email = data.get('email', '').strip()
     if not username or len(username) < 3: return jsonify({'error': 'Username needs 3+ chars'}), 400
-    if len(username) > 80: return jsonify({'error': 'Username too long'}), 400
-    if not re.match(r'^[a-zA-Z0-9_.\\-]+$', username):
-        return jsonify({'error': 'Username can only contain letters, numbers, dots, dashes, underscores'}), 400
-    if not password or len(password) < 8: return jsonify({'error': 'Password needs 8+ chars'}), 400
+    if not password or len(password) < 4: return jsonify({'error': 'Password needs 4+ chars'}), 400
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username taken'}), 409
-    user = User(username=username, password_hash=generate_password_hash(password), email=email)
+    user = User(username=username, password_hash=generate_password_hash(password))
     db.session.add(user)
     db.session.commit()
-    if email:
-        threading.Thread(target=send_welcome_email, args=(email, username), daemon=True).start()
     session['user_id'] = user.id
     session['username'] = user.username
     return jsonify({'message': 'Registered', 'username': user.username}), 201
 
 @app.route('/api/login', methods=['POST'])
-@limiter.limit("10 per minute")
 def login():
     data = request.get_json()
     if not data: return jsonify({'error': 'Invalid request'}), 400
@@ -321,328 +81,50 @@ def logout():
 
 @app.route('/api/me')
 def api_me():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    return jsonify({
-        'username': user.username, 'theme': user.theme,
-        'email': user.email,
-        'telegram_notify': user.telegram_notify, 'telegram_chat_id': user.telegram_chat_id,
-        'share_token': user.share_token, 'ical_token': user.ical_token,
-        'is_admin': user.is_admin or False,
-        'timezone': user.timezone,
-    })
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    user = User.query.get(session['user_id'])
+    return jsonify({'username': user.username, 'theme': user.theme})
 
 # ─── Theme ───
 @app.route('/api/theme', methods=['PUT'])
 def update_theme():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
     data = request.get_json()
     theme = data.get('theme', 'light')
     if theme not in ('light', 'dark', 'pink', 'blue', 'purple', 'green'):
         return jsonify({'error': 'Invalid theme'}), 400
+    user = User.query.get(session['user_id'])
     user.theme = theme
     db.session.commit()
     return jsonify({'theme': theme})
 
-# ─── Telegram Bot Webhook ───
-@app.route('/api/bot-webhook', methods=['POST'])
-def bot_webhook():
-    """Receives updates from Telegram bot."""
-    # Verify the request is from Telegram
-    token = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
-    if token != WEBHOOK_SECRET:
-        return 'Unauthorized', 403
-    update = request.get_json(force=True, silent=True)
-    if not update: return 'ok', 200
-
-    msg = update.get('message', {})
-    chat = msg.get('chat', {})
-    chat_id = str(chat.get('id', ''))
-    text = msg.get('text', '').strip()
-
-    if not chat_id or not text:
-        return 'ok', 200
-
-    if text == '/start':
-        welcome = (
-            f"👋 <b>Welcome to Timely Bot!</b>\n\n"
-            f"Your Telegram Chat ID is:\n"
-            f"<code>{chat_id}</code>\n\n"
-            f"📌 <b>How to connect:</b>\n"
-            f"1️⃣ Copy the Chat ID above\n"
-            f"2️⃣ Go to your <a href=\"https://timely.randillasith.me\">Timely App</a>\n"
-            f"3️⃣ Open ⚙️ Settings → 🔔 Notify\n"
-            f"4️⃣ Paste your Chat ID and enable notifications\n\n"
-            f"✅ Once connected, this message will change to confirm!"
-        )
-        result = telegram_send(chat_id, welcome)
-        if result:
-            msg_id = result.get('message_id')
-            state = BotState.query.get(chat_id)
-            if state:
-                state.welcome_message_id = msg_id
-            else:
-                db.session.add(BotState(chat_id=chat_id, welcome_message_id=msg_id))
-            db.session.commit()
-    elif text == '/chatid':
-        telegram_send(chat_id, f"Your Chat ID: <code>{chat_id}</code>")
-    elif text == '/today':
-        user = User.query.filter_by(telegram_chat_id=chat_id).first()
-        if not user:
-            telegram_send(chat_id, "❌ Your chat ID isn't connected to any account yet.\n\nGo to ⚙️ Settings → 🔔 Notify in the Timely app and save your Chat ID first!")
-        else:
-            today = datetime.now(timezone.utc).weekday()  # Mon=0
-            events = Event.query.filter_by(user_id=user.id, day=today).order_by(Event.start_time).all()
-            days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-            if not events:
-                telegram_send(chat_id, f"📅 <b>{days[today]} — No events</b>\n\nYou have nothing scheduled today. Enjoy your free day! 😊")
-            else:
-                msg = f"📅 <b>{days[today]} — Your Schedule</b>\n\n"
-                for e in events:
-                    emoji = '📌'
-                    if 'nap' in e.title.lower() or e.category == 'Nap': emoji = '😴'
-                    elif 'movie' in e.title.lower() or e.category == 'Movie': emoji = '🎬'
-                    elif 'oop' in e.title.lower() or e.category == 'OOP': emoji = '📺'
-                    elif 'database' in e.title.lower() or e.category == 'Database': emoji = '🗄️'
-                    elif 'lecture' in e.title.lower() or e.category == 'Lecture': emoji = '🏫'
-                    elif 'lab' in e.title.lower() or e.category == 'Lab': emoji = '🔬'
-                    elif e.category == 'Study': emoji = '📚'
-                    elif e.category == 'Travel': emoji = '🚶'
-                    repeat_tag = ' 🔁' if e.repeat == 'weekly' else ''
-                    msg += f"{emoji} <b>{e.title}</b>{repeat_tag}\n"
-                    msg += f"   ⏰ {e.start_time} – {e.end_time}\n"
-                    if e.note:
-                        msg += f"   💬 {e.note[:100]}\n"
-                    msg += "\n"
-                telegram_send(chat_id, msg.strip())
-    elif text == '/week':
-        user = User.query.filter_by(telegram_chat_id=chat_id).first()
-        if not user:
-            telegram_send(chat_id, "❌ Your chat ID isn't connected to any account yet.\n\nGo to ⚙️ Settings → 🔔 Notify in the Timely app and save your Chat ID first!")
-        else:
-            events = Event.query.filter_by(user_id=user.id).order_by(Event.day, Event.start_time).all()
-            days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-            msg = "📅 <b>Your Weekly Schedule</b>\n\n"
-            for di in range(7):
-                day_evs = [e for e in events if e.day == di]
-                if not day_evs: continue
-                msg += f"<b>{days[di]}</b>\n"
-                for e in day_evs:
-                    repeat_tag = ' 🔁' if e.repeat == 'weekly' else ''
-                    msg += f"  ⏰ {e.start_time}–{e.end_time} — {e.title}{repeat_tag}\n"
-                msg += "\n"
-            telegram_send(chat_id, msg.strip())
-    elif text in ('/help', '/commands'):
-        telegram_send(chat_id, (
-            "🤖 <b>Timely Bot Commands</b>\n\n"
-            "/start — Get your Chat ID & connection guide\n"
-            "/today — View today's schedule\n"
-            "/week — View full weekly schedule\n"
-            "/chatid — Show your Chat ID\n"
-            "/help — Show this message"
-        ))
-
-    return 'ok', 200
-
-# ─── Confirm bot connection (called from settings when user saves chat_id) ───
-def _confirm_bot(chat_id):
-    """Edit the welcome message to show connected status. Called internally."""
-    if not chat_id: return
-    state = BotState.query.get(chat_id)
-    if state and state.welcome_message_id:
-        confirm = (
-            f"✅ <b>Connected to Timely!</b>\n\n"
-            f"You'll now receive reminders here when events are about to start. 📅\n\n"
-            f"🔧 Use /start to see your Chat ID again"
-        )
-        telegram_edit(chat_id, state.welcome_message_id, confirm)
-        telegram_send(chat_id, "🔔 Notifications are now active! ✅")
-
-# ─── SMTP / Welcome Email ───
-SMTP_CONFIG = {
-    'host': os.environ.get('SMTP_HOST', 'mail.randillasith.me'),
-    'port': int(os.environ.get('SMTP_PORT', 587)),
-    'user': os.environ.get('SMTP_USER', 'admin@randillasith.me'),
-    'pass': os.environ.get('SMTP_PASS', ''),
-    'from': os.environ.get('SMTP_FROM', 'admin@randillasith.me'),
-    'from_name': os.environ.get('SMTP_FROM_NAME', 'Timely'),
-}
-
-def send_welcome_email(to_email, username):
-    """Send welcome email via SMTP. Runs in background thread."""
-    if not to_email or not SMTP_CONFIG['pass']:
-        return False
-    try:
-        import smtplib, email.utils
-        from email.mime.text import MIMEText
-        body = f"""Hi {username},
-
-Welcome to Timely! 📅
-
-Your schedule is ready to go. Start adding events and we'll send you reminders via Telegram.
-
-Happy scheduling!
-- Timely Team
-"""
-        msg = MIMEText(body)
-        msg['Subject'] = f"Welcome to Timely, {username}! 🎉"
-        msg['From'] = f"{SMTP_CONFIG['from_name']} <{SMTP_CONFIG['from']}>"
-        msg['To'] = to_email
-        msg['Date'] = email.utils.formatdate(localtime=True)
-        msg['Message-ID'] = email.utils.make_msgid(domain='timely.randillasith.me')
-
-        s = smtplib.SMTP(SMTP_CONFIG['host'], SMTP_CONFIG['port'], timeout=15)
-        s.ehlo()
-        s.starttls()
-        s.ehlo()
-        s.login(SMTP_CONFIG['user'], SMTP_CONFIG['pass'])
-        s.send_message(msg)
-        s.quit()
-        print(f"[Email] Welcome sent to {to_email}")
-        return True
-    except Exception as e:
-        print(f"[Email] Failed to send to {to_email}: {e}")
-        return False
-
-# ─── Notification Settings (Telegram only) ───
-@app.route('/api/notify-settings', methods=['GET'])
-def get_notify_settings():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    return jsonify({
-        'email': user.email,
-        'telegram_notify': user.telegram_notify,
-        'telegram_chat_id': user.telegram_chat_id,
-        'timezone': user.timezone,
-    })
-
-@app.route('/api/notify-settings', methods=['PUT'])
-def update_notify_settings():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    data = request.get_json()
-    if not data: return jsonify({'error': 'Invalid request'}), 400
-    if 'email' in data: user.email = data['email'].strip()
-    if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
-    if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
-    if 'timezone' in data: user.timezone = data['timezone'].strip()
-    db.session.commit()
-    # If chat_id was just set, confirm connection with bot directly
-    if user.telegram_chat_id and user.telegram_notify:
-        _confirm_bot(user.telegram_chat_id)
-    return jsonify({'message': 'Settings updated'})
-
-
-@app.route('/api/change-password', methods=['PUT'])
-def change_password():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    data = request.get_json()
-    if not data: return jsonify({'error': 'Invalid request'}), 400
-    current = data.get('current_password', '')
-    new_pass = data.get('new_password', '')
-    if not current or not new_pass:
-        return jsonify({'error': 'Both current and new password required'}), 400
-    if len(new_pass) < 8:
-        return jsonify({'error': 'New password needs 8+ characters'}), 400
-    if not check_password_hash(user.password_hash, current):
-        return jsonify({'error': 'Current password is incorrect'}), 403
-    user.password_hash = generate_password_hash(new_pass)
-    db.session.commit()
-    return jsonify({'message': 'Password changed successfully'})
-
-# ─── Categories ───
-@app.route('/api/categories', methods=['GET'])
-def get_categories():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    cats = Category.query.filter_by(user_id=user.id).all()
-    return jsonify([{'id':c.id,'name':c.name,'color':c.color,'icon':c.icon} for c in cats])
-
-@app.route('/api/categories', methods=['POST'])
-def create_category():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    data = request.get_json()
-    if not data or not data.get('name'): return jsonify({'error': 'Name required'}), 400
-    cat = Category(user_id=user.id, name=data['name'].strip(),
-        color=data.get('color','#c4956a'), icon=data.get('icon','📌'))
-    db.session.add(cat); db.session.commit()
-    return jsonify({'id': cat.id, 'message': 'Created'}), 201
-
-@app.route('/api/categories/<int:cid>', methods=['PUT'])
-def update_category(cid):
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    cat = Category.query.filter_by(id=cid, user_id=user.id).first()
-    if not cat: return jsonify({'error': 'Not found'}), 404
-    data = request.get_json()
-    if 'name' in data: cat.name = data['name'].strip()
-    if 'color' in data: cat.color = data['color']
-    if 'icon' in data: cat.icon = data['icon']
-    db.session.commit()
-    return jsonify({'message': 'Updated'})
-
-@app.route('/api/categories/<int:cid>', methods=['DELETE'])
-def delete_category(cid):
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    cat = Category.query.filter_by(id=cid, user_id=user.id).first()
-    if not cat: return jsonify({'error': 'Not found'}), 404
-    db.session.delete(cat); db.session.commit()
-    return jsonify({'message': 'Deleted'})
-
-@app.route('/api/presets')
-def get_presets():
-    """Return global presets from DB, falling back to defaults if empty."""
-    presets = GlobalPreset.query.order_by(GlobalPreset.sort_order).all()
-    if presets:
-        return jsonify([{'id':p.id,'name':p.name,'color':p.color,'icon':p.icon} for p in presets])
-    # Fallback defaults
-    return jsonify([
-        {'id':0,'name':'Study','color':'#f5e6d8','icon':'📚'},
-        {'id':0,'name':'Class','color':'#e8e0f0','icon':'🏫'},
-        {'id':0,'name':'Movie','color':'#f0d8d8','icon':'🎬'},
-        {'id':0,'name':'Nap','color':'#d8e8e8','icon':'😴'},
-        {'id':0,'name':'OOP Videos','color':'#d8e8d0','icon':'📺'},
-        {'id':0,'name':'Database','color':'#d8d0e8','icon':'🗄️'},
-        {'id':0,'name':'Travel','color':'#f0ece4','icon':'🚶'},
-        {'id':0,'name':'Other','color':'#f5e6d8','icon':'📌'},
-    ])
-
-# ─── Events ───
+# ─── Events API ───
 @app.route('/api/events', methods=['GET'])
 def get_events():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    events = Event.query.filter_by(user_id=user.id).all()
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
+    events = Event.query.filter_by(user_id=session['user_id']).all()
     return jsonify([{
-        'id':e.id,'day':e.day,'title':e.title,
-        'start':e.start_time,'end':e.end_time,
-        'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat,
-        'notify_before':e.notify_before, 'semester':e.semester or '',
+        'id': e.id, 'day': e.day, 'title': e.title,
+        'start': e.start_time, 'end': e.end_time,
+        'category': e.category, 'color': e.color, 'note': e.note
     } for e in events])
 
 @app.route('/api/events', methods=['POST'])
 def create_event():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
     data = request.get_json()
-    if not data: return jsonify({'error': 'Invalid request'}), 400
-    err = validate_event_data(data, require_all=True)
-    if err: return jsonify({'error': err}), 400
+    if not data or not data.get('title') or data.get('day') is None:
+        return jsonify({'error': 'Missing title or day'}), 400
     event = Event(
-        user_id=user.id, day=int(data['day']),
-        title=data['title'].strip()[:200],
-        start_time=data.get('start','09:00'),
-        end_time=data.get('end','10:00'),
-        category=data.get('category','task')[:50],
+        user_id=session['user_id'], day=int(data['day']),
+        title=data['title'].strip(),
+        start_time=data.get('start', '09:00'),
+        end_time=data.get('end', '10:00'),
+        category=data.get('category', 'task'),
         color=data.get('color') or None,
-        note=data.get('note','')[:2000],
-        repeat=data.get('repeat','none'),
-        notify_before=data.get('notify_before'),
-        semester=data.get('semester','')[:50],
+        note=data.get('note', '')
     )
     db.session.add(event)
     db.session.commit()
@@ -650,553 +132,32 @@ def create_event():
 
 @app.route('/api/events/<int:eid>', methods=['PUT'])
 def update_event(eid):
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    event = Event.query.filter_by(id=eid, user_id=user.id).first()
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
+    event = Event.query.filter_by(id=eid, user_id=session['user_id']).first()
     if not event: return jsonify({'error': 'Not found'}), 404
     data = request.get_json()
-    if not data: return jsonify({'error': 'Invalid request'}), 400
-    err = validate_event_data(data, require_all=False)
-    if err: return jsonify({'error': err}), 400
-    if 'title' in data: event.title = data['title'].strip()[:200]
+    if 'title' in data: event.title = data['title'].strip()
     if 'day' in data: event.day = int(data['day'])
     if 'start' in data: event.start_time = data['start']
     if 'end' in data: event.end_time = data['end']
-    if 'category' in data: event.category = data['category'][:50]
+    if 'category' in data: event.category = data['category']
     if 'color' in data: event.color = data['color'] or None
-    if 'note' in data: event.note = data['note'][:2000]
-    if 'repeat' in data: event.repeat = data['repeat']
-    if 'notify_before' in data: event.notify_before = data.get('notify_before')
-    if 'semester' in data: event.semester = data['semester'][:50]
+    if 'note' in data: event.note = data['note']
     db.session.commit()
     return jsonify({'message': 'Updated'})
 
 @app.route('/api/events/<int:eid>', methods=['DELETE'])
 def delete_event(eid):
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    event = Event.query.filter_by(id=eid, user_id=user.id).first()
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
+    event = Event.query.filter_by(id=eid, user_id=session['user_id']).first()
     if not event: return jsonify({'error': 'Not found'}), 404
-    db.session.delete(event); db.session.commit()
+    db.session.delete(event)
+    db.session.commit()
     return jsonify({'message': 'Deleted'})
-
-# ─── Import / Export ───
-@app.route('/api/export', methods=['GET'])
-def export_json():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    events = Event.query.filter_by(user_id=user.id).all()
-    cats = Category.query.filter_by(user_id=user.id).all()
-    return jsonify({
-        'version': 1,
-        'exported_at': datetime.now(timezone.utc).isoformat(),
-        'events': [{
-            'day':e.day,'title':e.title,'start':e.start_time,'end':e.end_time,
-            'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat
-        } for e in events],
-        'categories': [{'name':c.name,'color':c.color,'icon':c.icon} for c in cats]
-    })
-
-@app.route('/api/import', methods=['POST'])
-def import_json():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    data = request.get_json()
-    if not data or 'events' not in data:
-        return jsonify({'error': 'Invalid import file'}), 400
-    # Build set of existing events for deduplication
-    existing = {(e.day, e.title, e.start_time, e.end_time)
-                for e in Event.query.filter_by(user_id=user.id).all()}
-    existing_cats = {c.name for c in Category.query.filter_by(user_id=user.id).all()}
-    count = 0; skipped = 0
-    for e in data.get('events', []):
-        if not e.get('title'): continue
-        key = (int(e.get('day', 0)), e['title'].strip(), e.get('start', '09:00'), e.get('end', '10:00'))
-        if key in existing:
-            skipped += 1; continue
-        ev = Event(
-            user_id=user.id, day=int(e.get('day',0)),
-            title=e['title'].strip()[:200],
-            start_time=e.get('start','09:00'),
-            end_time=e.get('end','10:00'),
-            category=e.get('category','task'),
-            color=e.get('color') or None,
-            note=e.get('note','')[:2000],
-            repeat=e.get('repeat','none')
-        )
-        db.session.add(ev); count += 1; existing.add(key)
-    for c in data.get('categories', []):
-        if not c.get('name') or c['name'].strip() in existing_cats: continue
-        cat = Category(
-            user_id=user.id, name=c['name'].strip(),
-            color=c.get('color','#c4956a'), icon=c.get('icon','📌')
-        )
-        db.session.add(cat); existing_cats.add(c['name'].strip())
-    db.session.commit()
-    msg = f'Imported {count} events'
-    if skipped: msg += f' ({skipped} duplicates skipped)'
-    return jsonify({'message': msg})
-
-# ─── iCal Export ───
-@app.route('/api/ical')
-def export_ical():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    return Response(ical_for_user(user), mimetype='text/calendar',
-        headers={'Content-Disposition': 'attachment; filename=schedule.ics'})
-
-@app.route('/api/ical/feed/<token>')
-def ical_feed(token):
-    user = User.query.filter_by(ical_token=token).first()
-    if not user: return jsonify({'error': 'Not found'}), 404
-    return Response(ical_for_user(user), mimetype='text/calendar')
-
-def ical_escape(text):
-    """Escape text for iCal fields (RFC 5545)."""
-    return text.replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,').replace('\n', '\\n')
-
-def ical_for_user(user):
-    events = Event.query.filter_by(user_id=user.id).all()
-    lines = [
-        'BEGIN:VCALENDAR',
-        'VERSION:2.0',
-        'PRODID:-//Timetable//EN',
-        'CALSCALE:GREGORIAN',
-        'X-WR-CALNAME:Weekly Schedule',
-    ]
-    now = datetime.now(timezone.utc)
-    day_codes = ['MO','TU','WE','TH','FR','SA','SU']
-    # Find the actual date for each weekday in the current week
-    monday = now.date() - timedelta(days=now.weekday())
-    for e in events:
-        try:
-            start_h, start_m = map(int, e.start_time.split(':'))
-            end_h, end_m = map(int, e.end_time.split(':'))
-        except (ValueError, AttributeError):
-            continue
-        event_date = monday + timedelta(days=e.day)
-        uid = f'{e.id}@{user.ical_token}'
-        lines.extend([
-            'BEGIN:VEVENT',
-            f'UID:{uid}',
-            f'DTSTART;TZID=Asia/Colombo:{event_date.year}{event_date.month:02d}{event_date.day:02d}T{start_h:02d}{start_m:02d}00',
-            f'DTEND;TZID=Asia/Colombo:{event_date.year}{event_date.month:02d}{event_date.day:02d}T{end_h:02d}{end_m:02d}00',
-        ])
-        if e.repeat == 'weekly':
-            lines.append(f'RRULE:FREQ=WEEKLY;BYDAY={day_codes[e.day]}')
-        lines.append(f'SUMMARY:{ical_escape(e.title)}')
-        if e.note:
-            lines.append(f'DESCRIPTION:{ical_escape(e.note)}')
-        lines.append('END:VEVENT')
-    lines.append('END:VCALENDAR')
-    return '\r\n'.join(lines) + '\r\n'
-
-# ─── Share ───
-@app.route('/api/share')
-def get_share_info():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    domain = request.host_url.rstrip('/')
-    return jsonify({
-        'share_url': f'{domain}/share/{user.share_token}',
-        'ical_url': f'{domain}/api/ical/feed/{user.ical_token}',
-    })
-
-@app.route('/api/share/refresh', methods=['POST'])
-def refresh_share_token():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    user.share_token = str(uuid.uuid4())
-    user.ical_token = str(uuid.uuid4())
-    db.session.commit()
-    domain = request.host_url.rstrip('/')
-    return jsonify({
-        'share_url': f'{domain}/share/{user.share_token}',
-        'ical_url': f'{domain}/api/ical/feed/{user.ical_token}',
-        'share_token': user.share_token,
-        'ical_token': user.ical_token,
-    })
-
-@app.route('/share/<token>')
-def shared_view(token):
-    user = User.query.filter_by(share_token=token).first()
-    if not user: return 'Not found', 404
-    events = Event.query.filter_by(user_id=user.id).all()
-    h = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shared Schedule</title>'
-    h += '<style>body{font-family:system-ui;background:#f8f5f0;padding:1.5rem;color:#2d2a24}'
-    h += 'h1{font-size:1.3rem}h2{font-size:1rem;margin-top:1.5rem;color:#6a5f52}'
-    h += '.ev{background:#fff;border-radius:10px;padding:.6rem .8rem;margin:.3rem 0;box-shadow:0 1px 4px rgba(0,0,0,.06)}'
-    h += '.ev .t{font-weight:600}.ev .s{font-size:.8rem;color:#8a7a6a}</style></head><body>'
-    h += f'<h1>📅 {html.escape(user.username)}\'s Schedule</h1>'
-    days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-    for di in range(7):
-        day_evs = [e for e in events if e.day == di]
-        if not day_evs: continue
-        h += f'<h2>{days[di]}</h2>'
-        for e in sorted(day_evs, key=lambda x: x.start_time):
-            h += f'<div class="ev"><div class="t">{html.escape(e.title)}</div><div class="s">{html.escape(e.start_time)}–{html.escape(e.end_time)}</div></div>'
-    h += '</body></html>'
-    return h
-
-# ─── Public: Active Banner Announcements ───
-@app.route('/api/announcements/active')
-def get_active_announcements():
-    """Return active banner announcements for all users."""
-    now = datetime.now(timezone.utc)
-    announcements = Announcement.query.filter_by(active=True, type='banner').all()
-    return jsonify([{
-        'id': a.id, 'message': a.message,
-        'created_at': a.created_at.isoformat() if a.created_at else None,
-    } for a in announcements])
-
-# ─── Admin Routes ───
-def _admin_check():
-    """Returns (user, None) or (None, error_response)."""
-    if 'user_id' not in session:
-        return None, (jsonify({'error': 'Not logged in'}), 401)
-    user = db.session.get(User, session['user_id'])
-    if not user or not user.is_admin:
-        return None, (jsonify({'error': 'Admin access required'}), 403)
-    return user, None
-
-@app.route('/api/admin/users')
-def admin_list_users():
-    """List all users with event counts."""
-    _, err = _admin_check()
-    if err: return err
-    users = User.query.order_by(User.created_at.desc()).all()
-    result = []
-    for u in users:
-        event_count = Event.query.filter_by(user_id=u.id).count()
-        result.append({
-            'id': u.id, 'username': u.username, 'email': u.email,
-            'theme': u.theme, 'is_admin': u.is_admin,
-            'telegram_chat_id': u.telegram_chat_id,
-            'event_count': event_count,
-            'created_at': u.created_at.isoformat() if u.created_at else None,
-        })
-    return jsonify(result)
-
-@app.route('/api/admin/users/<int:uid>', methods=['DELETE'])
-def admin_delete_user(uid):
-    """Delete a user and all their data."""
-    _, err = _admin_check()
-    if err: return err
-    user = db.session.get(User, uid)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    if user.is_admin:
-        return jsonify({'error': 'Cannot delete another admin'}), 403
-    username = user.username
-    # Delete events, categories, bot state
-    Event.query.filter_by(user_id=uid).delete()
-    Category.query.filter_by(user_id=uid).delete()
-    if user.telegram_chat_id:
-        BotState.query.filter_by(chat_id=user.telegram_chat_id).delete()
-    db.session.delete(user)
-    db.session.commit()
-    return jsonify({'message': f'User "{username}" and all their data deleted'})
-
-@app.route('/api/admin/stats')
-def admin_stats():
-    """System statistics."""
-    _, err = _admin_check()
-    if err: return err
-    return jsonify({
-        'total_users': User.query.count(),
-        'total_events': Event.query.count(),
-        'total_categories': Category.query.count(),
-        'total_admins': User.query.filter_by(is_admin=True).count(),
-    })
-
-@app.route('/api/admin/bot-settings', methods=['GET'])
-def admin_get_bot_settings():
-    """Get current bot config (token masked)."""
-    _, err = _admin_check()
-    if err: return err
-    token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-    masked = token[:8] + '...' + token[-4:] if len(token) > 12 else ''
-    return jsonify({
-        'bot_token_masked': masked,
-        'bot_token_exists': bool(token),
-        'webhook_url': os.environ.get('WEBHOOK_URL', ''),
-    })
-
-@app.route('/api/admin/bot-settings', methods=['PUT'])
-def admin_update_bot_settings():
-    """Update bot token and webhook — writes env.conf + restarts service."""
-    _, err = _admin_check()
-    if err: return err
-    data = request.get_json()
-    if not data: return jsonify({'error': 'Invalid request'}), 400
-
-    new_token = data.get('bot_token', '').strip()
-    new_webhook = data.get('webhook_url', '').strip()
-
-    if not new_token:
-        return jsonify({'error': 'Bot token required'}), 400
-    if not new_webhook:
-        new_webhook = 'https://timely.randillasith.me/api/bot-webhook'
-
-    # Update env.conf
-    env_path = '/etc/systemd/system/timetable.service.d/env.conf'
-    try:
-        with open(env_path) as f:
-            content = f.read()
-        # Replace TELEGRAM_BOT_TOKEN line
-        import re
-        content = re.sub(
-            r'TELEGRAM_BOT_TOKEN=[^\n]*',
-            f'TELEGRAM_BOT_TOKEN={new_token}',
-            content
-        )
-        content = re.sub(
-            r'WEBHOOK_URL=[^\n]*',
-            f'WEBHOOK_URL={new_webhook}',
-            content
-        )
-        # Write via temp file + sudo
-        import tempfile, subprocess, os as _os
-        tmp = tempfile.NamedTemporaryFile(mode='w', delete=False, dir='/tmp')
-        tmp.write(content)
-        tmp.close()
-        subprocess.run(['sudo', 'cp', tmp.name, env_path], check=True)
-        _os.unlink(tmp.name)
-        subprocess.run(['sudo', 'systemctl', 'daemon-reload'], check=True)
-        subprocess.run(['sudo', 'systemctl', 'restart', 'timetable.service'], check=True)
-        return jsonify({'message': 'Bot token updated — service restarted. Re-login if disconnected.'})
-    except Exception as e:
-        return jsonify({'error': f'Failed to update: {e}'}), 500
-
-# ─── Admin: User Actions ───
-@app.route('/api/admin/users/<int:uid>/reset-password', methods=['PUT'])
-def admin_reset_password(uid):
-    """Generate a temp password for a user."""
-    _, err = _admin_check()
-    if err: return err
-    user = db.session.get(User, uid)
-    if not user: return jsonify({'error': 'User not found'}), 404
-    import secrets, string
-    chars = string.ascii_letters + string.digits
-    temp_pw = ''.join(secrets.choice(chars) for _ in range(10))
-    user.password_hash = generate_password_hash(temp_pw)
-    db.session.commit()
-    return jsonify({'message': f'Password reset for {user.username}', 'temp_password': temp_pw})
-
-@app.route('/api/admin/users/<int:uid>/toggle-admin', methods=['PUT'])
-def admin_toggle_admin(uid):
-    """Toggle admin status for a user (cannot toggle self)."""
-    me, err = _admin_check()
-    if err: return err
-    if me.id == uid: return jsonify({'error': 'Cannot change your own status'}), 400
-    user = db.session.get(User, uid)
-    if not user: return jsonify({'error': 'User not found'}), 404
-    user.is_admin = not user.is_admin
-    db.session.commit()
-    return jsonify({'message': f'{user.username} is now {"admin 👑" if user.is_admin else "user"}'})
-
-# ─── Admin: Analytics ───
-@app.route('/api/admin/analytics')
-def admin_analytics():
-    """Detailed analytics with engagement tracking."""
-    _, err = _admin_check()
-    if err: return err
-    total_users = User.query.count()
-    total_events = Event.query.count()
-    telegram_active = User.query.filter(User.telegram_chat_id != '', User.telegram_notify == True).count()
-    # Database size
-    db_path = os.path.join(INSTANCE_DIR, 'timetable.db')
-    db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
-    # Inactive users (no events, registered > 30 days ago)
-    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-    inactive_users = 0
-    for u in User.query.all():
-        if u.created_at and u.created_at.replace(tzinfo=None) < thirty_days_ago:
-            ev = Event.query.filter_by(user_id=u.id).first()
-            if not ev:
-                inactive_users += 1
-    return jsonify({
-        'total_users': total_users,
-        'total_events': total_events,
-        'telegram_active': telegram_active,
-        'db_size_bytes': db_size,
-        'db_size_mb': round(db_size / (1024 * 1024), 2),
-        'inactive_users': inactive_users,
-    })
-
-@app.route('/api/admin/bot-health')
-def admin_bot_health():
-    """Check Telegram bot webhook health."""
-    _, err = _admin_check()
-    if err: return err
-    if not BOT_TOKEN:
-        return jsonify({'healthy': False, 'error': 'No bot token configured', 'webhook': None})
-    try:
-        r = requests.post(f'{TELEGRAM_API}/getWebhookInfo', timeout=10)
-        if r.ok:
-            data = r.json().get('result', {})
-            return jsonify({
-                'healthy': data.get('url', '') != '',
-                'webhook_url': data.get('url', ''),
-                'pending_update_count': data.get('pending_update_count', 0),
-                'last_error_date': data.get('last_error_date'),
-                'last_error_message': data.get('last_error_message'),
-                'max_connections': data.get('max_connections', 40),
-            })
-        return jsonify({'healthy': False, 'error': 'API call failed', 'webhook': None})
-    except Exception as e:
-        return jsonify({'healthy': False, 'error': str(e), 'webhook': None})
-
-# ─── Admin: Global Presets ───
-@app.route('/api/admin/presets')
-def admin_get_presets():
-    _, err = _admin_check()
-    if err: return err
-    presets = GlobalPreset.query.order_by(GlobalPreset.sort_order).all()
-    return jsonify([{'id':p.id,'name':p.name,'color':p.color,'icon':p.icon,'sort_order':p.sort_order} for p in presets])
-
-@app.route('/api/admin/presets', methods=['POST'])
-def admin_create_preset():
-    _, err = _admin_check()
-    if err: return err
-    data = request.get_json()
-    if not data or not data.get('name'): return jsonify({'error': 'Name required'}), 400
-    max_order = db.session.query(db.func.max(GlobalPreset.sort_order)).scalar() or 0
-    preset = GlobalPreset(
-        name=data['name'].strip(), color=data.get('color','#c4956a'),
-        icon=data.get('icon','📌'), sort_order=max_order + 1,
-    )
-    db.session.add(preset); db.session.commit()
-    return jsonify({'id': preset.id, 'message': 'Preset created'}), 201
-
-@app.route('/api/admin/presets/<int:pid>', methods=['PUT'])
-def admin_update_preset(pid):
-    _, err = _admin_check()
-    if err: return err
-    preset = db.session.get(GlobalPreset, pid)
-    if not preset: return jsonify({'error': 'Not found'}), 404
-    data = request.get_json()
-    if 'name' in data: preset.name = data['name'].strip()
-    if 'color' in data: preset.color = data['color']
-    if 'icon' in data: preset.icon = data['icon']
-    if 'sort_order' in data: preset.sort_order = int(data['sort_order'])
-    db.session.commit()
-    return jsonify({'message': 'Preset updated'})
-
-@app.route('/api/admin/presets/<int:pid>', methods=['DELETE'])
-def admin_delete_preset(pid):
-    _, err = _admin_check()
-    if err: return err
-    preset = db.session.get(GlobalPreset, pid)
-    if not preset: return jsonify({'error': 'Not found'}), 404
-    db.session.delete(preset); db.session.commit()
-    return jsonify({'message': 'Preset deleted'})
-
-# ─── Admin: Announcements ───
-@app.route('/api/admin/announcements')
-def admin_list_announcements():
-    _, err = _admin_check()
-    if err: return err
-    anns = Announcement.query.order_by(Announcement.created_at.desc()).all()
-    return jsonify([{
-        'id': a.id, 'message': a.message, 'type': a.type, 'active': a.active,
-        'created_at': a.created_at.isoformat() if a.created_at else None,
-        'sent_at': a.sent_at.isoformat() if a.sent_at else None,
-    } for a in anns])
-
-@app.route('/api/admin/announcements', methods=['POST'])
-def admin_create_announcement():
-    _, err = _admin_check()
-    if err: return err
-    data = request.get_json()
-    if not data or not data.get('message'): return jsonify({'error': 'Message required'}), 400
-    ann = Announcement(
-        message=data['message'].strip(),
-        type=data.get('type', 'banner'),
-        active=data.get('active', True),
-    )
-    db.session.add(ann); db.session.commit()
-    return jsonify({'id': ann.id, 'message': 'Announcement created'}), 201
-
-@app.route('/api/admin/announcements/<int:aid>', methods=['PUT'])
-def admin_update_announcement(aid):
-    _, err = _admin_check()
-    if err: return err
-    ann = db.session.get(Announcement, aid)
-    if not ann: return jsonify({'error': 'Not found'}), 404
-    data = request.get_json()
-    if 'message' in data: ann.message = data['message'].strip()
-    if 'type' in data: ann.type = data['type']
-    if 'active' in data: ann.active = bool(data['active'])
-    db.session.commit()
-    return jsonify({'message': 'Announcement updated'})
-
-@app.route('/api/admin/announcements/<int:aid>', methods=['DELETE'])
-def admin_delete_announcement(aid):
-    _, err = _admin_check()
-    if err: return err
-    ann = db.session.get(Announcement, aid)
-    if not ann: return jsonify({'error': 'Not found'}), 404
-    db.session.delete(ann); db.session.commit()
-    return jsonify({'message': 'Announcement deleted'})
-
-@app.route('/api/admin/announcements/<int:aid>/broadcast', methods=['POST'])
-def admin_broadcast_announcement(aid):
-    """Send a Telegram broadcast to all users with bot enabled."""
-    _, err = _admin_check()
-    if err: return err
-    ann = db.session.get(Announcement, aid)
-    if not ann: return jsonify({'error': 'Not found'}), 404
-    if not ann.message.strip(): return jsonify({'error': 'Empty message'}), 400
-
-    users = User.query.filter(User.telegram_chat_id != '', User.telegram_notify == True).all()
-    sent = 0; failed = 0
-    for u in users:
-        try:
-            r = requests.post(f'{TELEGRAM_API}/sendMessage', json={
-                'chat_id': u.telegram_chat_id,
-                'text': f'📢 <b>Announcement</b>\n\n{ann.message}',
-                'parse_mode': 'HTML',
-            }, timeout=10)
-            if r.ok: sent += 1
-            else: failed += 1
-        except:
-            failed += 1
-    ann.sent_at = datetime.now(timezone.utc)
-    db.session.commit()
-    return jsonify({
-        'message': f'Broadcast sent to {sent} users ({failed} failed)',
-        'sent': sent, 'failed': failed, 'total': len(users),
-    })
-
-# ─── Background notifier ───
-def _start_notifier():
-    from notifier import check_and_notify
-    t = threading.Thread(target=check_and_notify, args=(app,), daemon=True)
-    t.start()
-    print("[App] Notifier thread started")
 
 # ─── Init ───
 with app.app_context():
-    migrate_db()
-
-# Set Telegram webhook on startup
-if BOT_TOKEN:
-    WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'https://timely.randillasith.me/api/bot-webhook')
-    try:
-        r = requests.post(f"{TELEGRAM_API}/setWebhook", json={
-            'url': WEBHOOK_URL,
-            'allowed_updates': ['message'],
-            'secret_token': WEBHOOK_SECRET
-        }, timeout=10)
-        if r.ok:
-            logging.info(f"[Bot] Webhook set to {WEBHOOK_URL}")
-        else:
-            logging.error(f"[Bot] Webhook failed: {r.text}")
-    except Exception as e:
-        logging.error(f"[Bot] Webhook setup error: {e}")
-
-_start_notifier()
+    db.create_all()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
