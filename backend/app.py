@@ -337,7 +337,7 @@ def bot_webhook():
 
     if text == '/start':
         welcome = (
-            f"👋 <b>Welcome to Timetable Bot!</b>\n\n"
+            f"👋 <b>Welcome to Timely Bot!</b>\n\n"
             f"Your Telegram Chat ID is:\n"
             f"<code>{chat_id}</code>\n\n"
             f"📌 <b>How to connect:</b>\n"
@@ -423,7 +423,7 @@ def _confirm_bot(chat_id):
     state = BotState.query.get(chat_id)
     if state and state.welcome_message_id:
         confirm = (
-            f"✅ <b>Connected to Timetable!</b>\n\n"
+            f"✅ <b>Connected to Timely!</b>\n\n"
             f"You'll now receive reminders here when events are about to start. 📅\n\n"
             f"🔧 Use /start to see your Chat ID again"
         )
@@ -434,9 +434,9 @@ def _confirm_bot(chat_id):
 SMTP_CONFIG = {
     'host': os.environ.get('SMTP_HOST', 'mail.randillasith.me'),
     'port': int(os.environ.get('SMTP_PORT', 587)),
-    'user': os.environ.get('SMTP_USER', 'timely@randillasith.me'),
+    'user': os.environ.get('SMTP_USER', 'admin@randillasith.me'),
     'pass': os.environ.get('SMTP_PASS', ''),
-    'from': os.environ.get('SMTP_FROM', 'timely@randillasith.me'),
+    'from': os.environ.get('SMTP_FROM', 'admin@randillasith.me'),
     'from_name': os.environ.get('SMTP_FROM_NAME', 'Timely'),
 }
 
@@ -449,15 +449,15 @@ def send_welcome_email(to_email, username):
         from email.mime.text import MIMEText
         body = f"""Hi {username},
 
-Welcome to Timetable! 📅
+Welcome to Timely! 📅
 
 Your schedule is ready to go. Start adding events and we'll send you reminders via Telegram.
 
 Happy scheduling!
-- Timetable Team
+- Timely Team
 """
         msg = MIMEText(body)
-        msg['Subject'] = f"Welcome to Timetable, {username}! 🎉"
+        msg['Subject'] = f"Welcome to Timely, {username}! 🎉"
         msg['From'] = f"{SMTP_CONFIG['from_name']} <{SMTP_CONFIG['from']}>"
         msg['To'] = to_email
 
