@@ -96,6 +96,7 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
   background: var(--header-bg); border-bottom: 2px solid var(--border2);
   position: sticky; top: 0; z-index: 2;
 }
+.cal-time-header { font-size: .72rem; color: var(--text3); }
 .cal-header small { display: block; font-weight: 400; font-size: .68rem; color: var(--text3); }
 .cal-header.today { background: var(--today-bg); }
 .cal-time {
@@ -112,17 +113,22 @@ body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
 .cal-cell.today-col { background: var(--today-bg); }
 
 /* ── Events ── */
-.cal-overlay { position: relative; z-index: 3; grid-row: 2 / span 18; pointer-events: none; }
+.cal-overlay { position: relative; z-index: 3; grid-row: 2 / span 17; pointer-events: none; }
 .cal-event {
   position: absolute; left: 3px; right: 3px; pointer-events: auto;
-  border-radius: 8px; padding: 3px 6px; overflow: hidden;
-  font-size: .65rem; line-height: 1.25; cursor: pointer;
-  transition: box-shadow .15s; border: 1px solid transparent;
+  border-radius: 6px; padding: 3px 5px 3px 8px;
+  font-size: .65rem; line-height: 1.2; cursor: pointer;
+  transition: box-shadow .15s, min-width 0s; border: 1px solid rgba(0,0,0,.08);
   display: flex; flex-direction: column; justify-content: center; min-height: 24px;
 }
-.cal-event:hover { box-shadow: 0 2px 8px rgba(0,0,0,.15); z-index: 10; }
-.cal-event-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .65rem; }
-.cal-event-time { font-size: .52rem; opacity: .7; }
+.cal-event:hover { box-shadow: 0 3px 12px rgba(0,0,0,.25); z-index: 10; min-width: 180px; }
+.cal-event-title {
+  font-weight: 600; font-size: .6rem; line-height: 1.15;
+  overflow: visible;
+  word-break: break-word; hyphens: auto;
+}
+.cal-event-time { font-size: .5rem; opacity: .85; margin-top: 1px; }
+.cal-event:hover .cal-event-title { white-space: normal; overflow: visible; }
 
 /* ═══════════════════════════════════════════════
    LEGEND
@@ -221,4 +227,19 @@ input[type="file"]::file-selector-button { padding: .3rem .6rem; border: 1px sol
   .header h1 { font-size: 1.1rem; }
   .modal { padding: 1rem; }
   .modal .form-row { flex-direction: column; gap: 0; }
+}
+
+/* ── Announcement Banner ── */
+.announcement-banner {
+  max-width: 1200px; margin: 0 auto .6rem;
+  background: linear-gradient(135deg, #fff8e1, #fff3cd);
+  border: 1px solid #ffe082;
+  border-radius: 12px; padding: .6rem .9rem;
+  font-size: .82rem; color: #856404;
+  line-height: 1.4;
+}
+.theme-dark .announcement-banner {
+  background: linear-gradient(135deg, #3a3200, #4a4000);
+  border-color: #6a5a00;
+  color: #ffd54f;
 }

@@ -1,4 +1,4 @@
-const CACHE = 'timely-v2';
+const CACHE = 'timely-v9';
 const STATIC_ASSETS = ['/manifest.json', '/favicon.svg', '/icon-192.svg', '/icon-512.svg'];
 
 self.addEventListener('install', e => {
