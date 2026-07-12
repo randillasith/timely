@@ -59,7 +59,6 @@ export default function SettingsPanel({ onClose }) {
   };
 
   const doDownloadIcal = () => {
-    // Open iCal download in new tab
     window.open('/api/ical', '_blank');
   };
 
@@ -163,24 +162,32 @@ export default function SettingsPanel({ onClose }) {
                     telegram_chat_id: notifySettings.telegram_chat_id,
                   });
                   setSaved('✅ Saved!');
-                  setTimeout(() => setSaved(''), 2000);
+                  setTimeout(() => setSaved(''), 3000);
                 } catch(err) { setSaved('❌ ' + err.message); }
               }}>
                 <label>Telegram Chat ID</label>
                 <input type="text" value={notifySettings.telegram_chat_id} onChange={e => setNotifySettings({...notifySettings, telegram_chat_id: e.target.value})}
-                  placeholder="Message @RandilTimely_bot to get your ID" />
+                  placeholder="Paste your Chat ID here" />
+
                 <div style={{display:'flex',alignItems:'center',gap:'.5rem',marginBottom:'.5rem'}}>
                   <input type="checkbox" id="tgNotify" checked={notifySettings.telegram_notify}
                     onChange={e => setNotifySettings({...notifySettings, telegram_notify: e.target.checked})}
                     style={{width:'auto',marginBottom:0}} />
                   <label htmlFor="tgNotify" style={{marginBottom:0}}>🤖 Enable Telegram notifications</label>
                 </div>
-                <div style={{fontSize:'.72rem',color:'var(--text3)',marginBottom:'.8rem'}}>
-                  1. Open <a href="https://t.me/RandilTimely_bot" target="_blank" rel="noopener" style={{color:'var(--accent)'}}>@RandilTimely_bot</a><br/>
-                  2. Send <strong>/start</strong> to the bot<br/>
-                  3. Forward the chat ID you receive here
+
+                <div style={{background:'var(--surface2)',borderRadius:'10px',padding:'.8rem',marginBottom:'.8rem',fontSize:'.78rem',border:'1px solid var(--border-light)'}}>
+                  <strong>📋 How to connect:</strong>
+                  <ol style={{marginTop:'.3rem',paddingLeft:'1.2rem',lineHeight:1.8}}>
+                    <li>Open <a href="https://t.me/RandilTimely_bot" target="_blank" rel="noopener" style={{color:'var(--accent)'}}>@RandilTimely_bot</a> on Telegram</li>
+                    <li>Send <strong>/start</strong> to the bot</li>
+                    <li>Copy the <strong>Chat ID</strong> the bot sends you</li>
+                    <li>Paste it above and click <strong>Save</strong></li>
+                  </ol>
+                  <p style={{marginTop:'.3rem',color:'var(--text2)'}}>✅ The bot will automatically confirm the connection!</p>
                 </div>
-                <button type="submit" className="btn btn-primary">Save</button>
+
+                <button type="submit" className="btn btn-primary">📥 Save & Connect</button>
                 {saved && <span style={{marginLeft:'.5rem',fontSize:'.8rem',color:'var(--text)'}}>{saved}</span>}
               </form>
             )}

@@ -1,4 +1,4 @@
-import os, uuid, textwrap
+import os, uuid, textwrap, sqlite3, threading, requests, time
 from datetime import datetime, timedelta
 from flask import Flask, request, session, jsonify, Response
 from flask_sqlalchemy import SQLAlchemy
@@ -14,7 +14,11 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 CORS(app, supports_credentials=True)
 
 db = SQLAlchemy(app)
-os.makedirs(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance'), exist_ok=True)
+INSTANCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
+os.makedirs(INSTANCE_DIR, exist_ok=True)
+
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # ─── Models ───
 class User(db.Model):
@@ -23,13 +27,16 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     theme = db.Column(db.String(20), default='light')
-    email = db.Column(db.String(120), default='')
-    email_notify = db.Column(db.Boolean, default=False)
     telegram_notify = db.Column(db.Boolean, default=False)
     telegram_chat_id = db.Column(db.String(50), default='')
     ical_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     share_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class BotState(db.Model):
+    __tablename__ = 'bot_state'
+    chat_id = db.Column(db.String(50), primary_key=True)
+    welcome_message_id = db.Column(db.Integer, default=None)
 
 class Category(db.Model):
     __tablename__ = 'categories'
@@ -53,6 +60,109 @@ class Event(db.Model):
     repeat = db.Column(db.String(10), default='none')
     notify_before = db.Column(db.Integer, default=None)
     notified = db.Column(db.Boolean, default=False)
+
+# ─── Safe Migration ───
+def migrate_db():
+    """Add missing columns without losing data. Backs up DB first."""
+    db_path = os.path.join(INSTANCE_DIR, 'timetable.db')
+    if not os.path.exists(db_path):
+        db.create_all()
+        return
+
+    # Backup
+    backup_path = db_path + '.backup'
+    try:
+        import shutil
+        shutil.copy2(db_path, backup_path)
+        print(f"[Migration] Backed up to {backup_path}")
+    except Exception as e:
+        print(f"[Migration] Backup failed: {e}")
+
+    db.create_all()
+
+    # Get existing columns per table
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    model_columns = {
+        'users': [
+            ('theme', 'VARCHAR(20)', 'light'),
+            ('telegram_notify', 'BOOLEAN', '0'),
+            ('telegram_chat_id', 'VARCHAR(50)', "''"),
+            ('ical_token', 'VARCHAR(36)', "''"),
+            ('share_token', 'VARCHAR(36)', "''"),
+            ('created_at', 'DATETIME', None),
+        ],
+        'events': [
+            ('category', 'VARCHAR(50)', "'task'"),
+            ('color', 'VARCHAR(7)', 'NULL'),
+            ('note', 'TEXT', "''"),
+            ('repeat', 'VARCHAR(10)', "'none'"),
+            ('notify_before', 'INTEGER', 'NULL'),
+            ('notified', 'BOOLEAN', '0'),
+        ],
+        'categories': [
+            ('color', 'VARCHAR(7)', "'#c4956a'"),
+            ('icon', 'VARCHAR(10)', "'📌'"),
+        ],
+    }
+
+    for table, cols in model_columns.items():
+        cur.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cur.fetchall()}
+        for col_name, col_type, default in cols:
+            if col_name not in existing:
+                try:
+                    sql = f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
+                    if default is not None:
+                        sql += f" DEFAULT {default}"
+                    cur.execute(sql)
+                    print(f"[Migration] Added {table}.{col_name}")
+                except Exception as e:
+                    print(f"[Migration] Could not add {table}.{col_name}: {e}")
+
+    conn.commit()
+    conn.close()
+    print("[Migration] Complete")
+
+# ─── Telegram Bot Helpers ───
+def telegram_send(chat_id, text, reply_markup=None):
+    if not chat_id or not BOT_TOKEN: return None
+    try:
+        payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
+        if reply_markup:
+            payload['reply_markup'] = reply_markup
+        r = requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        data = r.json()
+        if r.ok and data.get('ok') and data.get('result'):
+            return data['result']
+        return None
+    except Exception as e:
+        print(f"[Bot] send error: {e}")
+        return None
+
+def telegram_edit(chat_id, message_id, text):
+    if not chat_id or not message_id or not BOT_TOKEN: return False
+    try:
+        r = requests.post(f"{TELEGRAM_API}/editMessageText", json={
+            'chat_id': chat_id, 'message_id': message_id,
+            'text': text, 'parse_mode': 'HTML'
+        }, timeout=10)
+        return r.ok
+    except Exception as e:
+        print(f"[Bot] edit error: {e}")
+        return False
+
+def telegram_delete(chat_id, message_id):
+    if not chat_id or not message_id or not BOT_TOKEN: return False
+    try:
+        r = requests.post(f"{TELEGRAM_API}/deleteMessage", json={
+            'chat_id': chat_id, 'message_id': message_id
+        }, timeout=10)
+        return r.ok
+    except Exception as e:
+        print(f"[Bot] delete error: {e}")
+        return False
 
 # ─── Helpers ───
 def login_required():
@@ -108,7 +218,6 @@ def api_me():
     if not user: return jsonify({'error': 'Not logged in'}), 401
     return jsonify({
         'username': user.username, 'theme': user.theme,
-        'email': user.email, 'email_notify': user.email_notify,
         'telegram_notify': user.telegram_notify, 'telegram_chat_id': user.telegram_chat_id,
         'share_token': user.share_token, 'ical_token': user.ical_token
     })
@@ -126,14 +235,79 @@ def update_theme():
     db.session.commit()
     return jsonify({'theme': theme})
 
-# ─── Notification Settings ───
+# ─── Telegram Bot Webhook ───
+@app.route('/api/bot-webhook', methods=['POST'])
+def bot_webhook():
+    """Receives updates from Telegram bot."""
+    update = request.get_json(force=True, silent=True)
+    if not update: return 'ok', 200
+
+    msg = update.get('message', {})
+    chat = msg.get('chat', {})
+    chat_id = str(chat.get('id', ''))
+    text = msg.get('text', '').strip()
+
+    if not chat_id or not text:
+        return 'ok', 200
+
+    if text == '/start':
+        welcome = (
+            f"👋 <b>Welcome to Timetable Bot!</b>\n\n"
+            f"Your Telegram Chat ID is:\n"
+            f"<code>{chat_id}</code>\n\n"
+            f"📌 <b>How to connect:</b>\n"
+            f"1️⃣ Copy the Chat ID above\n"
+            f"2️⃣ Go to your <a href=\"https://timetable.randillasith.me\">Timetable App</a>\n"
+            f"3️⃣ Open ⚙️ Settings → 🔔 Notify\n"
+            f"4️⃣ Paste your Chat ID and enable notifications\n\n"
+            f"✅ Once connected, this message will change to confirm!"
+        )
+        result = telegram_send(chat_id, welcome)
+        if result:
+            msg_id = result.get('message_id')
+            state = BotState.query.get(chat_id)
+            if state:
+                state.welcome_message_id = msg_id
+            else:
+                db.session.add(BotState(chat_id=chat_id, welcome_message_id=msg_id))
+            db.session.commit()
+    elif text == '/chatid':
+        telegram_send(chat_id, f"Your Chat ID: <code>{chat_id}</code>")
+
+    return 'ok', 200
+
+# ─── Confirm bot connection (called from settings when user saves chat_id) ───
+@app.route('/api/bot/confirm-connection', methods=['POST'])
+def confirm_bot_connection():
+    """When user saves their chat_id in settings, edit the welcome message."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+
+    data = request.get_json()
+    chat_id = (data or {}).get('chat_id', user.telegram_chat_id)
+
+    if not chat_id:
+        return jsonify({'error': 'No chat ID'}), 400
+
+    state = BotState.query.get(chat_id)
+    if state and state.welcome_message_id:
+        # Edit the old welcome message to confirmation
+        confirm = (
+            f"✅ <b>Connected to Timetable!</b>\n\n"
+            f"You'll now receive reminders here when events are about to start. 📅\n\n"
+            f"🔧 Use /start to see your Chat ID again"
+        )
+        telegram_edit(chat_id, state.welcome_message_id, confirm)
+        telegram_send(chat_id, "🔔 Notifications are now active! ✅")
+
+    return jsonify({'message': 'Confirmed'})
+
+# ─── Notification Settings (Telegram only) ───
 @app.route('/api/notify-settings', methods=['GET'])
 def get_notify_settings():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
     return jsonify({
-        'email': user.email,
-        'email_notify': user.email_notify,
         'telegram_notify': user.telegram_notify,
         'telegram_chat_id': user.telegram_chat_id,
     })
@@ -144,11 +318,16 @@ def update_notify_settings():
     if not user: return jsonify({'error': 'Not logged in'}), 401
     data = request.get_json()
     if not data: return jsonify({'error': 'Invalid request'}), 400
-    if 'email' in data: user.email = data['email'].strip()
-    if 'email_notify' in data: user.email_notify = bool(data['email_notify'])
     if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
     if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
     db.session.commit()
+    # If chat_id was just set, confirm connection with bot
+    if user.telegram_chat_id and user.telegram_notify:
+        try:
+            requests.post(f"http://localhost:5000/api/bot/confirm-connection",
+                json={'chat_id': user.telegram_chat_id}, timeout=5)
+        except:
+            pass
     return jsonify({'message': 'Settings updated'})
 
 # ─── Categories ───
@@ -344,7 +523,6 @@ def ical_for_user(user):
         start_h, start_m = map(int, e.start_time.split(':'))
         end_h, end_m = map(int, e.end_time.split(':'))
         uid = f'{e.id}@{user.ical_token}'
-        # For recurring weekly events
         rrule = 'RRULE:FREQ=WEEKLY;BYDAY=' + ['MO','TU','WE','TH','FR','SA','SU'][e.day] if e.repeat == 'weekly' else ''
         lines.extend([
             'BEGIN:VEVENT',
@@ -392,7 +570,6 @@ def shared_view(token):
     user = User.query.filter_by(share_token=token).first()
     if not user: return 'Not found', 404
     events = Event.query.filter_by(user_id=user.id).all()
-    # Simple shared view
     html = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shared Schedule</title>'
     html += '<style>body{font-family:system-ui;background:#f8f5f0;padding:1.5rem;color:#2d2a24}'
     html += 'h1{font-size:1.3rem}h2{font-size:1rem;margin-top:1.5rem;color:#6a5f52}'
@@ -409,19 +586,33 @@ def shared_view(token):
     html += '</body></html>'
     return html
 
-# ─── Start notification checker thread ───
-import threading
+# ─── Background notifier ───
 def _start_notifier():
     from notifier import check_and_notify
     t = threading.Thread(target=check_and_notify, args=(app,), daemon=True)
     t.start()
     print("[App] Notifier thread started")
 
-_start_notifier()
-
 # ─── Init ───
 with app.app_context():
-    db.create_all()
+    migrate_db()
+
+# Set Telegram webhook on startup
+if BOT_TOKEN:
+    WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'https://timetable.randillasith.me/api/bot-webhook')
+    try:
+        r = requests.post(f"{TELEGRAM_API}/setWebhook", json={
+            'url': WEBHOOK_URL,
+            'allowed_updates': ['message']
+        }, timeout=10)
+        if r.ok:
+            print(f"[Bot] Webhook set to {WEBHOOK_URL}")
+        else:
+            print(f"[Bot] Webhook failed: {r.text}")
+    except Exception as e:
+        print(f"[Bot] Webhook setup error: {e}")
+
+_start_notifier()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
