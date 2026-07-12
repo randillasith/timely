@@ -159,6 +159,7 @@ export default function SettingsPanel({ onClose, onImport }) {
                 setSaved('');
                 try {
                   await updateNotifySettings({
+                    email: notifySettings.email,
                     telegram_notify: notifySettings.telegram_notify,
                     telegram_chat_id: notifySettings.telegram_chat_id,
                   });
@@ -166,7 +167,11 @@ export default function SettingsPanel({ onClose, onImport }) {
                   setTimeout(() => setSaved(''), 3000);
                 } catch(err) { setSaved('❌ ' + err.message); }
               }}>
-                <label>Telegram Chat ID</label>
+                <label>📧 Email Address</label>
+                <input type="email" value={notifySettings.email} onChange={e => setNotifySettings({...notifySettings, email: e.target.value})}
+                  placeholder="your@email.com (for welcome emails)" style={{marginBottom:'.5rem'}} />
+
+                <label>🤖 Telegram Chat ID</label>
                 <input type="text" value={notifySettings.telegram_chat_id} onChange={e => setNotifySettings({...notifySettings, telegram_chat_id: e.target.value})}
                   placeholder="Paste your Chat ID here" />
 

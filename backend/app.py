@@ -40,6 +40,7 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     theme = db.Column(db.String(20), default='light')
+    email = db.Column(db.String(120), default='')
     telegram_notify = db.Column(db.Boolean, default=False)
     telegram_chat_id = db.Column(db.String(50), default='')
     ical_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
@@ -99,6 +100,7 @@ def migrate_db():
 
     model_columns = {
         'users': [
+            ('email', 'VARCHAR(120)', "''"),
             ('theme', 'VARCHAR(20)', 'light'),
             ('telegram_notify', 'BOOLEAN', '0'),
             ('telegram_chat_id', 'VARCHAR(50)', "''"),
@@ -279,6 +281,9 @@ def login():
         return jsonify({'error': 'Invalid credentials'}), 401
     session['user_id'] = user.id
     session['username'] = user.username
+    # Send welcome email in background thread
+    if user.email:
+        threading.Thread(target=send_welcome_email, args=(user.email, user.username), daemon=True).start()
     return jsonify({'message': 'Logged in', 'username': user.username, 'theme': user.theme})
 
 @app.route('/api/logout', methods=['POST'])
@@ -292,6 +297,7 @@ def api_me():
     if not user: return jsonify({'error': 'Not logged in'}), 401
     return jsonify({
         'username': user.username, 'theme': user.theme,
+        'email': user.email,
         'telegram_notify': user.telegram_notify, 'telegram_chat_id': user.telegram_chat_id,
         'share_token': user.share_token, 'ical_token': user.ical_token
     })
@@ -368,12 +374,57 @@ def _confirm_bot(chat_id):
         telegram_edit(chat_id, state.welcome_message_id, confirm)
         telegram_send(chat_id, "🔔 Notifications are now active! ✅")
 
+# ─── SMTP / Welcome Email ───
+SMTP_CONFIG = {
+    'host': os.environ.get('SMTP_HOST', 'mail.randillasith.me'),
+    'port': int(os.environ.get('SMTP_PORT', 587)),
+    'user': os.environ.get('SMTP_USER', 'admin@randillasith.me'),
+    'pass': os.environ.get('SMTP_PASS', ''),
+    'from': os.environ.get('SMTP_FROM', 'admin@randillasith.me'),
+    'from_name': os.environ.get('SMTP_FROM_NAME', 'Timetable'),
+}
+
+def send_welcome_email(to_email, username):
+    """Send welcome email via SMTP. Runs in background thread."""
+    if not to_email or not SMTP_CONFIG['pass']:
+        return False
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        body = f"""Hi {username},
+
+Welcome to Timetable! 📅
+
+Your schedule is ready to go. Start adding events and we'll send you reminders via Telegram.
+
+Happy scheduling!
+- Timetable Team
+"""
+        msg = MIMEText(body)
+        msg['Subject'] = f"Welcome to Timetable, {username}! 🎉"
+        msg['From'] = f"{SMTP_CONFIG['from_name']} <{SMTP_CONFIG['from']}>"
+        msg['To'] = to_email
+
+        s = smtplib.SMTP(SMTP_CONFIG['host'], SMTP_CONFIG['port'], timeout=15)
+        s.ehlo()
+        s.starttls()
+        s.ehlo()
+        s.login(SMTP_CONFIG['user'], SMTP_CONFIG['pass'])
+        s.send_message(msg)
+        s.quit()
+        print(f"[Email] Welcome sent to {to_email}")
+        return True
+    except Exception as e:
+        print(f"[Email] Failed to send to {to_email}: {e}")
+        return False
+
 # ─── Notification Settings (Telegram only) ───
 @app.route('/api/notify-settings', methods=['GET'])
 def get_notify_settings():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
     return jsonify({
+        'email': user.email,
         'telegram_notify': user.telegram_notify,
         'telegram_chat_id': user.telegram_chat_id,
     })
@@ -384,6 +435,7 @@ def update_notify_settings():
     if not user: return jsonify({'error': 'Not logged in'}), 401
     data = request.get_json()
     if not data: return jsonify({'error': 'Invalid request'}), 400
+    if 'email' in data: user.email = data['email'].strip()
     if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
     if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
     db.session.commit()
