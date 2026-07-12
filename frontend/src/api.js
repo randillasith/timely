@@ -25,3 +25,7 @@ export const createCategory = c => req('/categories', { method:'POST', body:JSON
 export const updateCategory = (id, c) => req('/categories/'+id, { method:'PUT', body:JSON.stringify(c) });
 export const deleteCategory = id => req('/categories/'+id, { method:'DELETE' });
 export const getPresets = () => req('/presets');
+export const exportJson = () => req('/export');
+export const importJson = d => req('/import', { method:'POST', body:JSON.stringify(d) });
+export const getShareInfo = () => req('/share');
+export const refreshTokens = () => req('/share/refresh', { method:'POST' });

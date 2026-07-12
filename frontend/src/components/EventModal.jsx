@@ -9,6 +9,7 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
   const [category, setCategory] = useState(event?.category || 'task');
   const [color, setColor] = useState(event?.color || '');
   const [note, setNote] = useState(event?.note || '');
+  const [repeat, setRepeat] = useState(event?.repeat || 'none');
   const [err, setErr] = useState('');
 
   useEffect(() => {
@@ -17,21 +18,11 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
-  // Auto-set color when category changes (if no custom color set)
-  const handleCategory = val => {
-    setCategory(val);
-    if (!color || color === getCatColor(category)) {
-      const autoColor = getCatColor(val);
-      if (autoColor) setColor(autoColor);
-    }
-  };
-
   const getCatColor = cat => {
     const p = presets.find(c => c.name.toLowerCase() === cat);
     if (p) return p.color;
     const c = categories.find(c => c.name === cat);
-    if (c) return c.color;
-    return '';
+    return c?.color || '';
   };
 
   const getCatIcon = cat => {
@@ -41,18 +32,20 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
     return c?.icon || '📌';
   };
 
-  const knownCategories = [
-    ...presets.map(p => ({ value: p.name.toLowerCase(), label: `${p.icon} ${p.name}` })),
-    ...categories.map(c => ({ value: c.name, label: `${c.icon} ${c.name}` })),
-  ];
+  const handleCategory = val => {
+    setCategory(val);
+    const autoColor = getCatColor(val);
+    if (autoColor && (!color || color === getCatColor(category))) {
+      setColor(autoColor);
+    }
+  };
 
   const submit = e => {
     e.preventDefault(); setErr('');
     if (!title.trim()) { setErr('Title is required'); return; }
-    // Allow overnight events (start > end means next day)
     onSave({
       title: title.trim(), day, start, end,
-      category, color: color || null, note
+      category, color: color || null, note, repeat
     });
   };
 
@@ -103,38 +96,25 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
             </div>
           </div>
 
-          <label>Color</label>
-          <div className="form-row" style={{alignItems:'center'}}>
-            <div style={{flex:'0 0 50px'}}>
-              <input type="color" value={color || '#f5e6d8'} onChange={e=>setColor(e.target.value)}
-                style={{width:'48px',height:'34px',padding:0,marginBottom:0,cursor:'pointer'}} />
-            </div>
-            <div style={{flex:1}}>
-              <select value={color} onChange={e=>setColor(e.target.value)}
-                style={{marginBottom:0}}>
-                <option value="">Auto (from category)</option>
-                <option value="#f5e6d8">📚 Study</option>
-                <option value="#e8e0f0">🏫 Class</option>
-                <option value="#f0d8d8">🎬 Movie</option>
-                <option value="#d8e8e8">😴 Nap</option>
-                <option value="#d8e8d0">📺 OOP</option>
-                <option value="#d8d0e8">🗄️ Database</option>
-                <option value="#f0ece4">🚶 Travel</option>
-                <option value="#e8829a">🌸 Pink</option>
-                <option value="#89b0d4">💙 Blue</option>
-                <option value="#7ec8a4">🌿 Green</option>
-                <option value="#d4a0d4">💜 Purple</option>
-                <option value="#f5d76e">⭐ Yellow</option>
+          <div className="form-row">
+            <div>
+              <label>Repeat</label>
+              <select value={repeat} onChange={e=>setRepeat(e.target.value)}>
+                <option value="none">Does not repeat</option>
+                <option value="weekly">🔁 Every week</option>
               </select>
+            </div>
+            <div>
+              <label>Color</label>
+              <input type="color" value={color || getCatColor(category) || '#f5e6d8'}
+                onChange={e=>setColor(e.target.value)}
+                style={{width:'100%',height:'34px',padding:0,marginBottom:0,cursor:'pointer'}} />
             </div>
           </div>
 
-          {category !== 'custom' && (
-            <div style={{marginBottom:'.75rem',display:'flex',alignItems:'center',gap:'.4rem'}}>
-              <span className="tag" style={{background: (color || getCatColor(category) || '#f5e6d8')}}>
-                {getCatIcon(category)} {category === 'task' ? 'Study' : category.charAt(0).toUpperCase() + category.slice(1)}
-              </span>
-              <span style={{fontSize:'.7rem',color:'var(--text3)'}}>auto-colored</span>
+          {repeat === 'weekly' && (
+            <div style={{fontSize:'.75rem',color:'var(--text2)',marginBottom:'.5rem',padding:'.4rem .6rem',background:'var(--surface2)',borderRadius:'6px'}}>
+              🔁 This event repeats every {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][day]}
             </div>
           )}
 
