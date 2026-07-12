@@ -5,7 +5,7 @@ import { AuthContext } from '../App';
 
 export default function Register() {
   const [u, setU] = useState('');
-  const [e, setE] = useState('');
+  const [eml, setEml] = useState('');
   const [p, setP] = useState('');
   const [c, setC] = useState('');
   const [err, setErr] = useState('');
@@ -17,7 +17,7 @@ export default function Register() {
     if (!u || !p) { setErr('Fill all fields'); return; }
     if (p !== c) { setErr('Passwords do not match'); return; }
     try {
-      const d = await register(u, p, e);
+      const d = await register(u, p, eml);
       setUser(d.username);
       nav('/');
     } catch (err) { setErr(err.message); }
@@ -34,7 +34,7 @@ export default function Register() {
           <label>Username</label>
           <input value={u} onChange={e=>setU(e.target.value)} placeholder="Choose a username" autoFocus />
           <label>Email</label>
-          <input type="email" value={e} onChange={e=>setE(e.target.value)} placeholder="your@email.com" />
+          <input type="email" value={eml} onChange={e=>setEml(e.target.value)} placeholder="your@email.com" />
           <label>Password</label>
           <input type="password" value={p} onChange={e=>setP(e.target.value)} placeholder="At least 8 chars" />
           <label>Confirm Password</label>
