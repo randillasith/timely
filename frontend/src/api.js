@@ -29,3 +29,5 @@ export const exportJson = () => req('/export');
 export const importJson = d => req('/import', { method:'POST', body:JSON.stringify(d) });
 export const getShareInfo = () => req('/share');
 export const refreshTokens = () => req('/share/refresh', { method:'POST' });
+export const getNotifySettings = () => req('/notify-settings');
+export const updateNotifySettings = s => req('/notify-settings', { method:'PUT', body:JSON.stringify(s) });

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { exportJson, importJson, getShareInfo, refreshTokens } from '../api';
+import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings } from '../api';
 
 export default function SettingsPanel({ onClose }) {
   const [tab, setTab] = useState('export');
@@ -8,12 +8,15 @@ export default function SettingsPanel({ onClose }) {
   const [importResult, setImportResult] = useState('');
   const [copied, setCopied] = useState('');
   const fileRef = useRef();
+  const [notifySettings, setNotifySettings] = useState(null);
+  const [saved, setSaved] = useState('');
 
   useEffect(() => {
     getShareInfo().then(d => {
       setShareUrl(d.share_url);
       setIcalUrl(d.ical_url);
     }).catch(() => {});
+    getNotifySettings().then(setNotifySettings).catch(() => {});
     const h = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -64,10 +67,10 @@ export default function SettingsPanel({ onClose }) {
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={{maxWidth:'480px'}}>
         <div style={{display:'flex',gap:'.3rem',marginBottom:'1rem',borderBottom:'1px solid var(--border)',paddingBottom:'.5rem'}}>
-          {['export','import','share','ical'].map(t => (
+          {['export','import','share','ical','notify'].map(t => (
             <button key={t} className={`btn btn-sm ${tab===t?'btn-primary':''}`}
               onClick={() => setTab(t)}>
-              {t==='export'?'📤 Export':t==='import'?'📥 Import':t==='share'?'🔗 Share': '📅 iCal'}
+              {t==='export'?'📤 Export':t==='import'?'📥 Import':t==='share'?'🔗 Share':t==='ical'?'📅 iCal':'🔔 Notify'}
             </button>
           ))}
           <div style={{flex:1}} />
@@ -141,6 +144,61 @@ export default function SettingsPanel({ onClose }) {
               <strong>Google Calendar:</strong> Other calendars → + → From URL → paste link<br />
               <strong>Apple Calendar:</strong> File → New Calendar Subscription → paste link
             </div>
+          </div>
+        )}
+
+        {tab === 'notify' && (
+          <div>
+            <h2 style={{fontSize:'1rem',marginBottom:'.5rem'}}>🔔 Notifications</h2>
+            <p style={{fontSize:'.8rem',color:'var(--text2)',marginBottom:'.8rem'}}>
+              Get notified before events start. Set per-event timing in the event editor.
+            </p>
+            {notifySettings && (
+              <form onSubmit={async e => {
+                e.preventDefault();
+                setSaved('');
+                try {
+                  await updateNotifySettings({
+                    email: notifySettings.email,
+                    email_notify: notifySettings.email_notify,
+                    telegram_notify: notifySettings.telegram_notify,
+                    telegram_chat_id: notifySettings.telegram_chat_id,
+                  });
+                  setSaved('✅ Saved!');
+                  setTimeout(() => setSaved(''), 2000);
+                } catch(err) { setSaved('❌ ' + err.message); }
+              }}>
+                <label>Email address</label>
+                <input type="email" value={notifySettings.email} onChange={e => setNotifySettings({...notifySettings, email: e.target.value})}
+                  placeholder="your@email.com" />
+                <div style={{display:'flex',alignItems:'center',gap:'.5rem',marginBottom:'.75rem'}}>
+                  <input type="checkbox" id="emailNotify" checked={notifySettings.email_notify}
+                    onChange={e => setNotifySettings({...notifySettings, email_notify: e.target.checked})}
+                    style={{width:'auto',marginBottom:0}} />
+                  <label htmlFor="emailNotify" style={{marginBottom:0}}>📧 Send email notifications</label>
+                </div>
+
+                <hr style={{border:'none',borderTop:'1px solid var(--border-light)',margin:'.5rem 0'}} />
+
+                <label>Telegram Chat ID</label>
+                <input type="text" value={notifySettings.telegram_chat_id} onChange={e => setNotifySettings({...notifySettings, telegram_chat_id: e.target.value})}
+                  placeholder="Message @RandilTimely_bot to get your ID" />
+                <div style={{display:'flex',alignItems:'center',gap:'.5rem',marginBottom:'.5rem'}}>
+                  <input type="checkbox" id="tgNotify" checked={notifySettings.telegram_notify}
+                    onChange={e => setNotifySettings({...notifySettings, telegram_notify: e.target.checked})}
+                    style={{width:'auto',marginBottom:0}} />
+                  <label htmlFor="tgNotify" style={{marginBottom:0}}>🤖 Send Telegram notifications</label>
+                </div>
+                <div style={{fontSize:'.72rem',color:'var(--text3)',marginBottom:'.8rem'}}>
+                  1. Open <a href="https://t.me/RandilTimely_bot" target="_blank" rel="noopener" style={{color:'var(--accent)'}}>@RandilTimely_bot</a><br/>
+                  2. Send <strong>/start</strong> to the bot<br/>
+                  3. Forward the chat ID you receive here
+                </div>
+
+                <button type="submit" className="btn btn-primary">Save Notification Settings</button>
+                {saved && <span style={{marginLeft:'.5rem',fontSize:'.8rem',color:'var(--text)'}}>{saved}</span>}
+              </form>
+            )}
           </div>
         )}
 

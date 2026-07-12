@@ -10,6 +10,7 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
   const [color, setColor] = useState(event?.color || '');
   const [note, setNote] = useState(event?.note || '');
   const [repeat, setRepeat] = useState(event?.repeat || 'none');
+  const [notifyBefore, setNotifyBefore] = useState(event?.notify_before ?? null);
   const [err, setErr] = useState('');
 
   useEffect(() => {
@@ -45,7 +46,8 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
     if (!title.trim()) { setErr('Title is required'); return; }
     onSave({
       title: title.trim(), day, start, end,
-      category, color: color || null, note, repeat
+      category, color: color || null, note, repeat,
+      notify_before: notifyBefore
     });
   };
 
@@ -117,6 +119,15 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
               🔁 This event repeats every {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][day]}
             </div>
           )}
+
+          <label>Notify</label>
+          <select value={notifyBefore ?? ''} onChange={e => setNotifyBefore(e.target.value ? Number(e.target.value) : null)} style={{marginBottom:'.5rem'}}>
+            <option value="">🔕 Don't notify</option>
+            <option value="5">⏰ 5 minutes before</option>
+            <option value="15">⏰ 15 minutes before</option>
+            <option value="30">⏰ 30 minutes before</option>
+            <option value="60">⏰ 1 hour before</option>
+          </select>
 
           <label>Note (optional)</label>
           <textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Extra details..." rows={2} />

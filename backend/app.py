@@ -23,6 +23,10 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     theme = db.Column(db.String(20), default='light')
+    email = db.Column(db.String(120), default='')
+    email_notify = db.Column(db.Boolean, default=False)
+    telegram_notify = db.Column(db.Boolean, default=False)
+    telegram_chat_id = db.Column(db.String(50), default='')
     ical_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     share_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -47,6 +51,8 @@ class Event(db.Model):
     color = db.Column(db.String(7), default=None)
     note = db.Column(db.Text, default='')
     repeat = db.Column(db.String(10), default='none')
+    notify_before = db.Column(db.Integer, default=None)
+    notified = db.Column(db.Boolean, default=False)
 
 # ─── Helpers ───
 def login_required():
@@ -102,6 +108,8 @@ def api_me():
     if not user: return jsonify({'error': 'Not logged in'}), 401
     return jsonify({
         'username': user.username, 'theme': user.theme,
+        'email': user.email, 'email_notify': user.email_notify,
+        'telegram_notify': user.telegram_notify, 'telegram_chat_id': user.telegram_chat_id,
         'share_token': user.share_token, 'ical_token': user.ical_token
     })
 
@@ -117,6 +125,31 @@ def update_theme():
     user.theme = theme
     db.session.commit()
     return jsonify({'theme': theme})
+
+# ─── Notification Settings ───
+@app.route('/api/notify-settings', methods=['GET'])
+def get_notify_settings():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    return jsonify({
+        'email': user.email,
+        'email_notify': user.email_notify,
+        'telegram_notify': user.telegram_notify,
+        'telegram_chat_id': user.telegram_chat_id,
+    })
+
+@app.route('/api/notify-settings', methods=['PUT'])
+def update_notify_settings():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    data = request.get_json()
+    if not data: return jsonify({'error': 'Invalid request'}), 400
+    if 'email' in data: user.email = data['email'].strip()
+    if 'email_notify' in data: user.email_notify = bool(data['email_notify'])
+    if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
+    if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
+    db.session.commit()
+    return jsonify({'message': 'Settings updated'})
 
 # ─── Categories ───
 @app.route('/api/categories', methods=['GET'])
@@ -181,7 +214,8 @@ def get_events():
     return jsonify([{
         'id':e.id,'day':e.day,'title':e.title,
         'start':e.start_time,'end':e.end_time,
-        'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat
+        'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat,
+        'notify_before':e.notify_before
     } for e in events])
 
 @app.route('/api/events', methods=['POST'])
@@ -199,7 +233,8 @@ def create_event():
         category=data.get('category','task'),
         color=data.get('color') or None,
         note=data.get('note',''),
-        repeat=data.get('repeat','none')
+        repeat=data.get('repeat','none'),
+        notify_before=data.get('notify_before')
     )
     db.session.add(event)
     db.session.commit()
@@ -220,6 +255,7 @@ def update_event(eid):
     if 'color' in data: event.color = data['color'] or None
     if 'note' in data: event.note = data['note']
     if 'repeat' in data: event.repeat = data['repeat']
+    if 'notify_before' in data: event.notify_before = data.get('notify_before')
     db.session.commit()
     return jsonify({'message': 'Updated'})
 
@@ -372,6 +408,16 @@ def shared_view(token):
             html += f'<div class="ev"><div class="t">{e.title}</div><div class="s">{e.start_time}–{e.end_time}</div></div>'
     html += '</body></html>'
     return html
+
+# ─── Start notification checker thread ───
+import threading
+def _start_notifier():
+    from notifier import check_and_notify
+    t = threading.Thread(target=check_and_notify, args=(app,), daemon=True)
+    t.start()
+    print("[App] Notifier thread started")
+
+_start_notifier()
 
 # ─── Init ───
 with app.app_context():
