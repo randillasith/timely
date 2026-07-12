@@ -445,7 +445,7 @@ def send_welcome_email(to_email, username):
     if not to_email or not SMTP_CONFIG['pass']:
         return False
     try:
-        import smtplib
+        import smtplib, email.utils
         from email.mime.text import MIMEText
         body = f"""Hi {username},
 
@@ -460,6 +460,8 @@ Happy scheduling!
         msg['Subject'] = f"Welcome to Timely, {username}! 🎉"
         msg['From'] = f"{SMTP_CONFIG['from_name']} <{SMTP_CONFIG['from']}>"
         msg['To'] = to_email
+        msg['Date'] = email.utils.formatdate(localtime=True)
+        msg['Message-ID'] = email.utils.make_msgid(domain='timely.randillasith.me')
 
         s = smtplib.SMTP(SMTP_CONFIG['host'], SMTP_CONFIG['port'], timeout=15)
         s.ehlo()
