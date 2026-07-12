@@ -1,26 +1,40 @@
-import { useState, useEffect, useContext, useCallback } from 'react';
+import { useState, useEffect, useCallback, useContext } from 'react';
 import { AuthContext, ThemeContext } from '../App';
 import Calendar from '../components/Calendar';
 import EventModal from '../components/EventModal';
 import ThemePicker from '../components/ThemePicker';
-import { getEvents, createEvent, updateEvent, deleteEvent, setTheme as apiSetTheme } from '../api';
-
-const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+import { getEvents, createEvent, updateEvent, deleteEvent, setTheme as apiSetTheme, getCategories, createCategory, updateCategory, deleteCategory, getPresets } from '../api';
 
 export default function Timetable() {
   const { user, logout } = useContext(AuthContext);
   const { theme, setTheme } = useContext(ThemeContext);
   const [events, setEvents] = useState([]);
-  const [modal, setModal] = useState(null); // null | {event?, day?, hour?}
+  const [categories, setCategories] = useState([]);
+  const [presets, setPresets] = useState([]);
+  const [modal, setModal] = useState(null);
+  const [catModal, setCatModal] = useState(false);
+  const [weekOffset, setWeekOffset] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    try { setEvents(await getEvents()); }
-    catch(e) { console.error(e); }
+    try {
+      const [evs, cats, prs] = await Promise.all([
+        getEvents(), getCategories(), getPresets()
+      ]);
+      setEvents(evs);
+      setCategories(cats);
+      setPresets(prs);
+    } catch(e) { console.error(e); }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Compute legend from preset + custom categories
+  const legendItems = [
+    ...presets.map(p => ({ key: p.name, color: p.color, icon: p.icon, label: p.name })),
+    ...categories.map(c => ({ key: 'cat-'+c.id, color: c.color, icon: c.icon, label: c.name })),
+  ];
 
   const handleSave = async data => {
     if (modal?.event) {
@@ -45,48 +59,159 @@ export default function Timetable() {
     await apiSetTheme(t).catch(() => {});
   };
 
+  const handleAddCategory = async (name, color, icon) => {
+    await createCategory({ name, color, icon });
+    load();
+  };
+  const handleDeleteCategory = async id => {
+    if (!confirm('Delete this category?')) return;
+    await deleteCategory(id);
+    load();
+  };
+
+  const getWeekLabel = () => {
+    if (weekOffset === 0) return 'This Week';
+    if (weekOffset === -1) return 'Last Week';
+    if (weekOffset === 1) return 'Next Week';
+    return `Week ${weekOffset > 0 ? '+' : ''}${weekOffset}`;
+  };
+
   return (
     <div className="timetable-page">
-      <header className="topbar">
-        <div className="topbar-left">
+      {/* HEADER */}
+      <div className="header">
+        <div>
           <h1>📅 Weekly Schedule</h1>
-          <span className="user-badge">👤 {user}</span>
+          <div className="header-sub">Y2 Semester 1 · SLIIT</div>
         </div>
-        <div className="topbar-right">
+        <div className="header-actions">
+          <span className="user-badge">👤 {user}</span>
           <ThemePicker current={theme} onChange={handleTheme} />
-          <button className="btn" onClick={() => setModal({})}>+ Add Event</button>
+          <button className="btn" onClick={() => setCatModal(true)}>🏷️ Categories</button>
+          <button className="btn btn-primary" onClick={() => setModal({})}>+ Add Event</button>
           <button className="btn btn-outline" onClick={logout}>Logout</button>
         </div>
-      </header>
-
-      <div className="day-tabs">
-        {DAYS.map((d, i) => (
-          <button key={i} className="day-tab" onClick={() => {
-            document.querySelector('.calendar-wrap')?.scrollIntoView({behavior:'smooth'});
-          }}>{d.slice(0,3)}</button>
-        ))}
       </div>
 
+      {/* WEEK NAV */}
+      <div className="week-bar">
+        <button onClick={() => setWeekOffset(w => w - 1)}>◀</button>
+        <span className="week-label">{getWeekLabel()}</span>
+        <button onClick={() => setWeekOffset(w => w + 1)}>▶</button>
+        <button className="btn btn-sm" style={{marginLeft:'.3rem'}} onClick={() => setWeekOffset(0)}>Today</button>
+      </div>
+
+      {/* CALENDAR */}
       {loading ? (
-        <div className="loading-caption">Loading your schedule...</div>
+        <div className="empty-state"><p>Loading your schedule...</p></div>
       ) : (
         <Calendar
           events={events}
+          weekOffset={weekOffset}
           onSlotClick={(day, hour) => setModal({ day, hour })}
           onEventClick={ev => setModal({ event: ev })}
         />
       )}
 
+      {/* LEGEND */}
+      {legendItems.length > 0 && (
+        <div className="legend">
+          {legendItems.map((item, i) => (
+            <span key={i} className="legend-item">
+              <span className="legend-swatch" style={{background:item.color}}></span>
+              {item.icon} {item.label}
+            </span>
+          ))}
+          <span className="legend-hint">Click a slot → add · Click event → edit</span>
+        </div>
+      )}
+
+      {/* EVENT MODAL */}
       {modal && (
         <EventModal
           event={modal.event}
           defaultDay={modal.day}
           defaultHour={modal.hour}
+          categories={categories}
+          presets={presets}
           onSave={handleSave}
           onDelete={modal.event ? handleDelete : null}
           onClose={() => setModal(null)}
         />
       )}
+
+      {/* CATEGORY MANAGER */}
+      {catModal && <CategoryManager
+        categories={categories}
+        presets={presets}
+        onAdd={handleAddCategory}
+        onDelete={handleDeleteCategory}
+        onClose={() => setCatModal(false)}
+      />}
+    </div>
+  );
+}
+
+function CategoryManager({ categories, presets, onAdd, onDelete, onClose }) {
+  const [name, setName] = useState('');
+  const [color, setColor] = useState('#c4956a');
+  const [icon, setIcon] = useState('📌');
+
+  const submit = e => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onAdd(name.trim(), color, icon);
+    setName(''); setColor('#c4956a'); setIcon('📌');
+  };
+
+  const ICONS = ['📚','🏫','🎬','😴','📺','🗄️','🚶','📌','💻','📝','🎮','🎵','✏️','📖','☕','🏋️'];
+
+  return (
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal cat-manager-modal">
+        <h2>🏷️ Manage Categories</h2>
+
+        <div style={{fontSize:'.75rem',color:'var(--text2)',marginBottom:'.5rem'}}>Built-in:</div>
+        <div className="cat-list">
+          {presets.map((p,i) => (
+            <div key={i} className="cat-row">
+              <span className="cat-color" style={{background:p.color}}></span>
+              <span className="cat-name">{p.icon} {p.name}</span>
+            </div>
+          ))}
+        </div>
+
+        {categories.length > 0 && (
+          <>
+            <div style={{fontSize:'.75rem',color:'var(--text2)',marginBottom:'.5rem'}}>Your custom:</div>
+            <div className="cat-list">
+              {categories.map(c => (
+                <div key={c.id} className="cat-row">
+                  <span className="cat-color" style={{background:c.color}}></span>
+                  <span className="cat-name">{c.icon} {c.name}</span>
+                  <button onClick={() => onDelete(c.id)} title="Delete">✕</button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <form onSubmit={submit} className="add-cat-form" style={{marginTop:'.5rem'}}>
+          <input type="text" value={name} onChange={e=>setName(e.target.value)}
+            placeholder="New category name" style={{flex:1}} />
+          <select value={icon} onChange={e=>setIcon(e.target.value)}
+            style={{width:'50px',padding:'.35rem',marginBottom:0}}>
+            {ICONS.map(ic => <option key={ic} value={ic}>{ic}</option>)}
+          </select>
+          <input type="color" value={color} onChange={e=>setColor(e.target.value)}
+            style={{width:'36px',height:'32px',padding:0,marginBottom:0,border:'1px solid var(--border)',borderRadius:'6px',cursor:'pointer'}} />
+          <button type="submit" className="btn btn-primary btn-sm">Add</button>
+        </form>
+
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>Done</button>
+        </div>
+      </div>
     </div>
   );
 }

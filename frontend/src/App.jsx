@@ -15,19 +15,14 @@ export default function App() {
 
   useEffect(() => {
     getMe().then(d => { setUser(d.username); setTheme(d.theme || 'light'); })
-      .catch(() => {}) 
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const logout = async () => {
-    await apiLogout();
-    setUser(null);
-  };
+  const logout = async () => { await apiLogout(); setUser(null); };
 
   if (loading) return (
-    <div className="app-loading">
-      <div className="spinner" />
-    </div>
+    <div className="app-loading"><div className="spinner" /></div>
   );
 
   return (

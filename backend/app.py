@@ -27,6 +27,14 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     events = db.relationship('Event', backref='user', lazy=True, cascade='all, delete-orphan')
 
+class Category(db.Model):
+    __tablename__ = 'categories'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(50), nullable=False)
+    color = db.Column(db.String(7), nullable=False, default='#c4956a')
+    icon = db.Column(db.String(10), nullable=False, default='📌')
+
 class Event(db.Model):
     __tablename__ = 'events'
     id = db.Column(db.Integer, primary_key=True)
@@ -35,7 +43,7 @@ class Event(db.Model):
     title = db.Column(db.String(200), nullable=False)
     start_time = db.Column(db.String(5), nullable=False)
     end_time = db.Column(db.String(5), nullable=False)
-    category = db.Column(db.String(20), default='task')
+    category = db.Column(db.String(50), default='task')
     color = db.Column(db.String(7), default=None)
     note = db.Column(db.Text, default='')
 
@@ -99,6 +107,63 @@ def update_theme():
     user.theme = theme
     db.session.commit()
     return jsonify({'theme': theme})
+
+# ─── Categories API ───
+@app.route('/api/categories', methods=['GET'])
+def get_categories():
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
+    cats = Category.query.filter_by(user_id=session['user_id']).all()
+    return jsonify([{
+        'id': c.id, 'name': c.name, 'color': c.color, 'icon': c.icon
+    } for c in cats])
+
+@app.route('/api/categories', methods=['POST'])
+def create_category():
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
+    data = request.get_json()
+    if not data or not data.get('name'): return jsonify({'error': 'Name required'}), 400
+    cat = Category(
+        user_id=session['user_id'], name=data['name'].strip(),
+        color=data.get('color', '#c4956a'), icon=data.get('icon', '📌')
+    )
+    db.session.add(cat)
+    db.session.commit()
+    return jsonify({'id': cat.id, 'message': 'Created'}), 201
+
+@app.route('/api/categories/<int:cid>', methods=['PUT'])
+def update_category(cid):
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
+    cat = Category.query.filter_by(id=cid, user_id=session['user_id']).first()
+    if not cat: return jsonify({'error': 'Not found'}), 404
+    data = request.get_json()
+    if 'name' in data: cat.name = data['name'].strip()
+    if 'color' in data: cat.color = data['color']
+    if 'icon' in data: cat.icon = data['icon']
+    db.session.commit()
+    return jsonify({'message': 'Updated'})
+
+@app.route('/api/categories/<int:cid>', methods=['DELETE'])
+def delete_category(cid):
+    if 'user_id' not in session: return jsonify({'error': 'Not logged in'}), 401
+    cat = Category.query.filter_by(id=cid, user_id=session['user_id']).first()
+    if not cat: return jsonify({'error': 'Not found'}), 404
+    db.session.delete(cat)
+    db.session.commit()
+    return jsonify({'message': 'Deleted'})
+
+@app.route('/api/presets')
+def get_presets():
+    """Return the built-in preset categories."""
+    return jsonify([
+        {'name': 'Study', 'color': '#f5e6d8', 'icon': '📚'},
+        {'name': 'Class', 'color': '#e8e0f0', 'icon': '🏫'},
+        {'name': 'Movie', 'color': '#f0d8d8', 'icon': '🎬'},
+        {'name': 'Nap', 'color': '#d8e8e8', 'icon': '😴'},
+        {'name': 'OOP Videos', 'color': '#d8e8d0', 'icon': '📺'},
+        {'name': 'Database', 'color': '#d8d0e8', 'icon': '🗄️'},
+        {'name': 'Travel', 'color': '#f0ece4', 'icon': '🚶'},
+        {'name': 'Other', 'color': '#f5e6d8', 'icon': '📌'},
+    ])
 
 # ─── Events API ───
 @app.route('/api/events', methods=['GET'])
