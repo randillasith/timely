@@ -20,7 +20,7 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # 2MB max request body
 
-ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', 'https://timetable.randillasith.me,http://localhost:5173').split(',')
+ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', 'https://timely.randillasith.me,https://timetable.randillasith.me,http://localhost:5173').split(',')
 CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
 
 db = SQLAlchemy(app)
@@ -255,14 +255,15 @@ def register():
     if not data: return jsonify({'error': 'Invalid request'}), 400
     username = data.get('username', '').strip()
     password = data.get('password', '')
+    email = data.get('email', '').strip()
     if not username or len(username) < 3: return jsonify({'error': 'Username needs 3+ chars'}), 400
     if len(username) > 80: return jsonify({'error': 'Username too long'}), 400
-    if not re.match(r'^[a-zA-Z0-9_.\-]+$', username):
+    if not re.match(r'^[a-zA-Z0-9_.\\-]+$', username):
         return jsonify({'error': 'Username can only contain letters, numbers, dots, dashes, underscores'}), 400
     if not password or len(password) < 8: return jsonify({'error': 'Password needs 8+ chars'}), 400
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username taken'}), 409
-    user = User(username=username, password_hash=generate_password_hash(password))
+    user = User(username=username, password_hash=generate_password_hash(password), email=email)
     db.session.add(user)
     db.session.commit()
     session['user_id'] = user.id
@@ -341,7 +342,7 @@ def bot_webhook():
             f"<code>{chat_id}</code>\n\n"
             f"📌 <b>How to connect:</b>\n"
             f"1️⃣ Copy the Chat ID above\n"
-            f"2️⃣ Go to your <a href=\"https://timetable.randillasith.me\">Timetable App</a>\n"
+            f"2️⃣ Go to your <a href=\"https://timely.randillasith.me\">Timely App</a>\n"
             f"3️⃣ Open ⚙️ Settings → 🔔 Notify\n"
             f"4️⃣ Paste your Chat ID and enable notifications\n\n"
             f"✅ Once connected, this message will change to confirm!"
@@ -357,6 +358,61 @@ def bot_webhook():
             db.session.commit()
     elif text == '/chatid':
         telegram_send(chat_id, f"Your Chat ID: <code>{chat_id}</code>")
+    elif text == '/today':
+        user = User.query.filter_by(telegram_chat_id=chat_id).first()
+        if not user:
+            telegram_send(chat_id, "❌ Your chat ID isn't connected to any account yet.\n\nGo to ⚙️ Settings → 🔔 Notify in the Timely app and save your Chat ID first!")
+        else:
+            today = datetime.now(timezone.utc).weekday()  # Mon=0
+            events = Event.query.filter_by(user_id=user.id, day=today).order_by(Event.start_time).all()
+            days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+            if not events:
+                telegram_send(chat_id, f"📅 <b>{days[today]} — No events</b>\n\nYou have nothing scheduled today. Enjoy your free day! 😊")
+            else:
+                msg = f"📅 <b>{days[today]} — Your Schedule</b>\n\n"
+                for e in events:
+                    emoji = '📌'
+                    if 'nap' in e.title.lower() or e.category == 'Nap': emoji = '😴'
+                    elif 'movie' in e.title.lower() or e.category == 'Movie': emoji = '🎬'
+                    elif 'oop' in e.title.lower() or e.category == 'OOP': emoji = '📺'
+                    elif 'database' in e.title.lower() or e.category == 'Database': emoji = '🗄️'
+                    elif 'lecture' in e.title.lower() or e.category == 'Lecture': emoji = '🏫'
+                    elif 'lab' in e.title.lower() or e.category == 'Lab': emoji = '🔬'
+                    elif e.category == 'Study': emoji = '📚'
+                    elif e.category == 'Travel': emoji = '🚶'
+                    repeat_tag = ' 🔁' if e.repeat == 'weekly' else ''
+                    msg += f"{emoji} <b>{e.title}</b>{repeat_tag}\n"
+                    msg += f"   ⏰ {e.start_time} – {e.end_time}\n"
+                    if e.note:
+                        msg += f"   💬 {e.note[:100]}\n"
+                    msg += "\n"
+                telegram_send(chat_id, msg.strip())
+    elif text == '/week':
+        user = User.query.filter_by(telegram_chat_id=chat_id).first()
+        if not user:
+            telegram_send(chat_id, "❌ Your chat ID isn't connected to any account yet.\n\nGo to ⚙️ Settings → 🔔 Notify in the Timely app and save your Chat ID first!")
+        else:
+            events = Event.query.filter_by(user_id=user.id).order_by(Event.day, Event.start_time).all()
+            days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+            msg = "📅 <b>Your Weekly Schedule</b>\n\n"
+            for di in range(7):
+                day_evs = [e for e in events if e.day == di]
+                if not day_evs: continue
+                msg += f"<b>{days[di]}</b>\n"
+                for e in day_evs:
+                    repeat_tag = ' 🔁' if e.repeat == 'weekly' else ''
+                    msg += f"  ⏰ {e.start_time}–{e.end_time} — {e.title}{repeat_tag}\n"
+                msg += "\n"
+            telegram_send(chat_id, msg.strip())
+    elif text in ('/help', '/commands'):
+        telegram_send(chat_id, (
+            "🤖 <b>Timely Bot Commands</b>\n\n"
+            "/start — Get your Chat ID & connection guide\n"
+            "/today — View today's schedule\n"
+            "/week — View full weekly schedule\n"
+            "/chatid — Show your Chat ID\n"
+            "/help — Show this message"
+        ))
 
     return 'ok', 200
 
@@ -378,10 +434,10 @@ def _confirm_bot(chat_id):
 SMTP_CONFIG = {
     'host': os.environ.get('SMTP_HOST', 'mail.randillasith.me'),
     'port': int(os.environ.get('SMTP_PORT', 587)),
-    'user': os.environ.get('SMTP_USER', 'admin@randillasith.me'),
+    'user': os.environ.get('SMTP_USER', 'timely@randillasith.me'),
     'pass': os.environ.get('SMTP_PASS', ''),
-    'from': os.environ.get('SMTP_FROM', 'admin@randillasith.me'),
-    'from_name': os.environ.get('SMTP_FROM_NAME', 'Timetable'),
+    'from': os.environ.get('SMTP_FROM', 'timely@randillasith.me'),
+    'from_name': os.environ.get('SMTP_FROM_NAME', 'Timely'),
 }
 
 def send_welcome_email(to_email, username):
@@ -736,7 +792,7 @@ with app.app_context():
 
 # Set Telegram webhook on startup
 if BOT_TOKEN:
-    WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'https://timetable.randillasith.me/api/bot-webhook')
+    WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'https://timely.randillasith.me/api/bot-webhook')
     try:
         r = requests.post(f"{TELEGRAM_API}/setWebhook", json={
             'url': WEBHOOK_URL,

@@ -12,7 +12,7 @@ async function req(path, opts = {}) {
 }
 
 export const login = (u, p) => req('/login', { method:'POST', body:JSON.stringify({username:u, password:p}) });
-export const register = (u, p) => req('/register', { method:'POST', body:JSON.stringify({username:u, password:p}) });
+export const register = (u, p, e) => req('/register', { method:'POST', body:JSON.stringify({username:u, password:p, email:e}) });
 export const logout = () => req('/logout', { method:'POST' });
 export const getMe = () => req('/me');
 export const getEvents = () => req('/events');
