@@ -177,6 +177,25 @@ def day_name(d):
 def index():
     return app.send_static_file('index.html')
 
+import os
+SPA_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend', 'dist')
+
+@app.before_request
+def spa_fallback():
+    """Serve index.html for any non-API, non-file path (fixes white screen on refresh)."""
+    if request.method != 'GET':
+        return None
+    path = request.path.lstrip('/')
+    # Don't intercept API routes or share routes
+    if path.startswith('api/') or path.startswith('share/'):
+        return None
+    # If it's a real file (JS, CSS, etc.), let Flask handle it normally
+    filepath = os.path.join(SPA_DIST, path)
+    if os.path.isfile(filepath):
+        return None
+    # Everything else → serve index.html (SPA routing)
+    return app.send_static_file('index.html')
+
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -277,21 +296,11 @@ def bot_webhook():
     return 'ok', 200
 
 # ─── Confirm bot connection (called from settings when user saves chat_id) ───
-@app.route('/api/bot/confirm-connection', methods=['POST'])
-def confirm_bot_connection():
-    """When user saves their chat_id in settings, edit the welcome message."""
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-
-    data = request.get_json()
-    chat_id = (data or {}).get('chat_id', user.telegram_chat_id)
-
-    if not chat_id:
-        return jsonify({'error': 'No chat ID'}), 400
-
+def _confirm_bot(chat_id):
+    """Edit the welcome message to show connected status. Called internally."""
+    if not chat_id: return
     state = BotState.query.get(chat_id)
     if state and state.welcome_message_id:
-        # Edit the old welcome message to confirmation
         confirm = (
             f"✅ <b>Connected to Timetable!</b>\n\n"
             f"You'll now receive reminders here when events are about to start. 📅\n\n"
@@ -299,8 +308,6 @@ def confirm_bot_connection():
         )
         telegram_edit(chat_id, state.welcome_message_id, confirm)
         telegram_send(chat_id, "🔔 Notifications are now active! ✅")
-
-    return jsonify({'message': 'Confirmed'})
 
 # ─── Notification Settings (Telegram only) ───
 @app.route('/api/notify-settings', methods=['GET'])
@@ -321,13 +328,9 @@ def update_notify_settings():
     if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
     if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
     db.session.commit()
-    # If chat_id was just set, confirm connection with bot
+    # If chat_id was just set, confirm connection with bot directly
     if user.telegram_chat_id and user.telegram_notify:
-        try:
-            requests.post(f"http://localhost:5000/api/bot/confirm-connection",
-                json={'chat_id': user.telegram_chat_id}, timeout=5)
-        except:
-            pass
+        _confirm_bot(user.telegram_chat_id)
     return jsonify({'message': 'Settings updated'})
 
 # ─── Categories ───
