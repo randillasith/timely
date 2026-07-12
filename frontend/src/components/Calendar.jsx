@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, Fragment } from 'react';
 
-const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday'];
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const HOURS = ['8AM','9AM','10AM','11AM','12PM','1PM','2PM','3PM','4PM','5PM','6PM','7PM','8PM','9PM','10PM','11PM','12AM','1AM'];
 const GRID_START = 8 * 60;
 const GRID_END = 25 * 60;
@@ -23,7 +23,7 @@ const CAT_COLORS = {
 const CAT_ICONS = { movie:'🎬', nap:'😴', oop:'📺', db:'🗄️', travel:'🚶', task:'📖', class:'📚', other:'📌' };
 
 export default function Calendar({ events, weekOffset, onSlotClick, onEventClick }) {
-  const weekEvents = useMemo(() => events.filter(e => e.day >= 0 && e.day <= 4), [events]);
+  const weekEvents = useMemo(() => events.filter(e => e.day >= 0 && e.day <= 6), [events]);
 
   const monday = useMemo(() => {
     const d = new Date(); d.setDate(d.getDate() + (d.getDay() === 0 ? -6 : 1 - d.getDay()));
@@ -39,8 +39,8 @@ export default function Calendar({ events, weekOffset, onSlotClick, onEventClick
   const isToday = (d) => d.getDate() === today.getDate() && d.getMonth() === today.getMonth() && d.getFullYear() === today.getFullYear();
 
   const byDay = useMemo(() => {
-    const d = [[],[],[],[],[]];
-    weekEvents.forEach(e => { if (e.day < 5) d[e.day].push(e); });
+    const d = [[],[],[],[],[],[],[]];
+    weekEvents.forEach(e => { if (e.day < 7) d[e.day].push(e); });
     return d;
   }, [weekEvents]);
 
@@ -55,21 +55,21 @@ export default function Calendar({ events, weekOffset, onSlotClick, onEventClick
         ))}
 
         {HOURS.map((label, hi) => (
-          <>
+          <Fragment key={hi}>
             <div className="cal-time">{label}</div>
-            {[0,1,2,3,4].map(di => (
+            {[0,1,2,3,4,5,6].map(di => (
               <div key={`${hi}-${di}`}
                 className={`cal-cell${isToday(dates[di])?' today-col':''}`}
                 onClick={() => onSlotClick(di, hi + 8)}
               />
             ))}
-          </>
+          </Fragment>
         ))}
 
-        {[0,1,2,3,4].map(di => {
+        {[0,1,2,3,4,5,6].map(di => {
           if (!byDay[di].length) return null;
           return (
-            <div key={`ol-${di}`} className="cal-overlay">
+            <div key={`ol-${di}`} className="cal-overlay" style={{ gridColumn: di + 2 }}>
               {byDay[di].map(ev => {
                 const s = toGridMin(ev.start);
                 const e = toGridMin(ev.end);

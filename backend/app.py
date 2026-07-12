@@ -1,24 +1,37 @@
-import os, uuid, textwrap, sqlite3, threading, requests, time
-from datetime import datetime, timedelta
+import os, uuid, html, sqlite3, threading, requests, time, re, logging, secrets
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request, session, jsonify, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__, static_folder='../frontend/dist', static_url_path='/')
-app.secret_key = os.environ.get('SECRET_KEY', 'change-this-in-production')
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+if 'SECRET_KEY' not in os.environ:
+    logging.warning("SECRET_KEY not set! Using random key — sessions will reset on restart.")
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'instance', 'timetable.db'
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-CORS(app, supports_credentials=True)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # 2MB max request body
+
+ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', 'https://timetable.randillasith.me,http://localhost:5173').split(',')
+CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
 
 db = SQLAlchemy(app)
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"],
+                  storage_uri="memory://")
 INSTANCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
 os.makedirs(INSTANCE_DIR, exist_ok=True)
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET', secrets.token_hex(16))
 
 # ─── Models ───
 class User(db.Model):
@@ -31,7 +44,7 @@ class User(db.Model):
     telegram_chat_id = db.Column(db.String(50), default='')
     ical_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     share_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 class BotState(db.Model):
     __tablename__ = 'bot_state'
@@ -167,7 +180,7 @@ def telegram_delete(chat_id, message_id):
 # ─── Helpers ───
 def login_required():
     if 'user_id' not in session: return None
-    return User.query.get(session['user_id'])
+    return db.session.get(User, session['user_id'])
 
 def day_name(d):
     return ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][d]
@@ -177,7 +190,6 @@ def day_name(d):
 def index():
     return app.send_static_file('index.html')
 
-import os
 SPA_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend', 'dist')
 
 @app.before_request
@@ -196,14 +208,54 @@ def spa_fallback():
     # Everything else → serve index.html (SPA routing)
     return app.send_static_file('index.html')
 
+@app.after_request
+def security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
+
+# ─── Validation Helpers ───
+TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+def validate_event_data(data, require_all=False):
+    """Validate event fields. Returns error string or None."""
+    if require_all:
+        if not data.get('title', '').strip():
+            return 'Title is required'
+        if data.get('day') is None:
+            return 'Day is required'
+    if 'day' in data:
+        try:
+            day = int(data['day'])
+            if day < 0 or day > 6:
+                return 'Day must be 0-6 (Mon-Sun)'
+        except (ValueError, TypeError):
+            return 'Invalid day value'
+    if 'start' in data and not TIME_RE.match(data['start']):
+        return 'Invalid start time format (use HH:MM)'
+    if 'end' in data and not TIME_RE.match(data['end']):
+        return 'Invalid end time format (use HH:MM)'
+    if 'repeat' in data and data['repeat'] not in ('none', 'weekly'):
+        return 'Invalid repeat value'
+    if 'color' in data and data['color']:
+        if not re.match(r'^#[0-9a-fA-F]{6}$', data['color']):
+            return 'Invalid color format (use #RRGGBB)'
+    return None
+
 @app.route('/api/register', methods=['POST'])
+@limiter.limit("5 per minute")
 def register():
     data = request.get_json()
     if not data: return jsonify({'error': 'Invalid request'}), 400
     username = data.get('username', '').strip()
     password = data.get('password', '')
     if not username or len(username) < 3: return jsonify({'error': 'Username needs 3+ chars'}), 400
-    if not password or len(password) < 4: return jsonify({'error': 'Password needs 4+ chars'}), 400
+    if len(username) > 80: return jsonify({'error': 'Username too long'}), 400
+    if not re.match(r'^[a-zA-Z0-9_.\-]+$', username):
+        return jsonify({'error': 'Username can only contain letters, numbers, dots, dashes, underscores'}), 400
+    if not password or len(password) < 8: return jsonify({'error': 'Password needs 8+ chars'}), 400
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username taken'}), 409
     user = User(username=username, password_hash=generate_password_hash(password))
@@ -214,6 +266,7 @@ def register():
     return jsonify({'message': 'Registered', 'username': user.username}), 201
 
 @app.route('/api/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def login():
     data = request.get_json()
     if not data: return jsonify({'error': 'Invalid request'}), 400
@@ -258,6 +311,10 @@ def update_theme():
 @app.route('/api/bot-webhook', methods=['POST'])
 def bot_webhook():
     """Receives updates from Telegram bot."""
+    # Verify the request is from Telegram
+    token = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
+    if token != WEBHOOK_SECRET:
+        return 'Unauthorized', 403
     update = request.get_json(force=True, silent=True)
     if not update: return 'ok', 200
 
@@ -405,16 +462,17 @@ def create_event():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
     data = request.get_json()
-    if not data or not data.get('title') or data.get('day') is None:
-        return jsonify({'error': 'Missing title or day'}), 400
+    if not data: return jsonify({'error': 'Invalid request'}), 400
+    err = validate_event_data(data, require_all=True)
+    if err: return jsonify({'error': err}), 400
     event = Event(
         user_id=user.id, day=int(data['day']),
-        title=data['title'].strip(),
+        title=data['title'].strip()[:200],
         start_time=data.get('start','09:00'),
         end_time=data.get('end','10:00'),
-        category=data.get('category','task'),
+        category=data.get('category','task')[:50],
         color=data.get('color') or None,
-        note=data.get('note',''),
+        note=data.get('note','')[:2000],
         repeat=data.get('repeat','none'),
         notify_before=data.get('notify_before')
     )
@@ -429,13 +487,16 @@ def update_event(eid):
     event = Event.query.filter_by(id=eid, user_id=user.id).first()
     if not event: return jsonify({'error': 'Not found'}), 404
     data = request.get_json()
-    if 'title' in data: event.title = data['title'].strip()
+    if not data: return jsonify({'error': 'Invalid request'}), 400
+    err = validate_event_data(data, require_all=False)
+    if err: return jsonify({'error': err}), 400
+    if 'title' in data: event.title = data['title'].strip()[:200]
     if 'day' in data: event.day = int(data['day'])
     if 'start' in data: event.start_time = data['start']
     if 'end' in data: event.end_time = data['end']
-    if 'category' in data: event.category = data['category']
+    if 'category' in data: event.category = data['category'][:50]
     if 'color' in data: event.color = data['color'] or None
-    if 'note' in data: event.note = data['note']
+    if 'note' in data: event.note = data['note'][:2000]
     if 'repeat' in data: event.repeat = data['repeat']
     if 'notify_before' in data: event.notify_before = data.get('notify_before')
     db.session.commit()
@@ -459,7 +520,7 @@ def export_json():
     cats = Category.query.filter_by(user_id=user.id).all()
     return jsonify({
         'version': 1,
-        'exported_at': datetime.utcnow().isoformat(),
+        'exported_at': datetime.now(timezone.utc).isoformat(),
         'events': [{
             'day':e.day,'title':e.title,'start':e.start_time,'end':e.end_time,
             'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat
@@ -474,29 +535,38 @@ def import_json():
     data = request.get_json()
     if not data or 'events' not in data:
         return jsonify({'error': 'Invalid import file'}), 400
-    count = 0
+    # Build set of existing events for deduplication
+    existing = {(e.day, e.title, e.start_time, e.end_time)
+                for e in Event.query.filter_by(user_id=user.id).all()}
+    existing_cats = {c.name for c in Category.query.filter_by(user_id=user.id).all()}
+    count = 0; skipped = 0
     for e in data.get('events', []):
         if not e.get('title'): continue
+        key = (int(e.get('day', 0)), e['title'].strip(), e.get('start', '09:00'), e.get('end', '10:00'))
+        if key in existing:
+            skipped += 1; continue
         ev = Event(
             user_id=user.id, day=int(e.get('day',0)),
-            title=e['title'].strip(),
+            title=e['title'].strip()[:200],
             start_time=e.get('start','09:00'),
             end_time=e.get('end','10:00'),
             category=e.get('category','task'),
             color=e.get('color') or None,
-            note=e.get('note',''),
+            note=e.get('note','')[:2000],
             repeat=e.get('repeat','none')
         )
-        db.session.add(ev); count += 1
+        db.session.add(ev); count += 1; existing.add(key)
     for c in data.get('categories', []):
-        if not c.get('name'): continue
+        if not c.get('name') or c['name'].strip() in existing_cats: continue
         cat = Category(
             user_id=user.id, name=c['name'].strip(),
             color=c.get('color','#c4956a'), icon=c.get('icon','📌')
         )
-        db.session.add(cat)
+        db.session.add(cat); existing_cats.add(c['name'].strip())
     db.session.commit()
-    return jsonify({'message': f'Imported {count} events'})
+    msg = f'Imported {count} events'
+    if skipped: msg += f' ({skipped} duplicates skipped)'
+    return jsonify({'message': msg})
 
 # ─── iCal Export ───
 @app.route('/api/ical')
@@ -512,6 +582,10 @@ def ical_feed(token):
     if not user: return jsonify({'error': 'Not found'}), 404
     return Response(ical_for_user(user), mimetype='text/calendar')
 
+def ical_escape(text):
+    """Escape text for iCal fields (RFC 5545)."""
+    return text.replace('\\', '\\\\').replace(';', '\\;').replace(',', '\\,').replace('\n', '\\n')
+
 def ical_for_user(user):
     events = Event.query.filter_by(user_id=user.id).all()
     lines = [
@@ -521,23 +595,29 @@ def ical_for_user(user):
         'CALSCALE:GREGORIAN',
         'X-WR-CALNAME:Weekly Schedule',
     ]
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+    day_codes = ['MO','TU','WE','TH','FR','SA','SU']
+    # Find the actual date for each weekday in the current week
+    monday = now.date() - timedelta(days=now.weekday())
     for e in events:
-        start_h, start_m = map(int, e.start_time.split(':'))
-        end_h, end_m = map(int, e.end_time.split(':'))
+        try:
+            start_h, start_m = map(int, e.start_time.split(':'))
+            end_h, end_m = map(int, e.end_time.split(':'))
+        except (ValueError, AttributeError):
+            continue
+        event_date = monday + timedelta(days=e.day)
         uid = f'{e.id}@{user.ical_token}'
-        rrule = 'RRULE:FREQ=WEEKLY;BYDAY=' + ['MO','TU','WE','TH','FR','SA','SU'][e.day] if e.repeat == 'weekly' else ''
         lines.extend([
             'BEGIN:VEVENT',
             f'UID:{uid}',
-            f'DTSTART;TZID=Asia/Colombo:{now.year}0101T{start_h:02d}{start_m:02d}00',
-            f'DTEND;TZID=Asia/Colombo:{now.year}0101T{end_h:02d}{end_m:02d}00',
+            f'DTSTART;TZID=Asia/Colombo:{event_date.year}{event_date.month:02d}{event_date.day:02d}T{start_h:02d}{start_m:02d}00',
+            f'DTEND;TZID=Asia/Colombo:{event_date.year}{event_date.month:02d}{event_date.day:02d}T{end_h:02d}{end_m:02d}00',
         ])
-        if rrule:
-            lines.append(rrule)
-        lines.append(f'SUMMARY:{e.title}')
+        if e.repeat == 'weekly':
+            lines.append(f'RRULE:FREQ=WEEKLY;BYDAY={day_codes[e.day]}')
+        lines.append(f'SUMMARY:{ical_escape(e.title)}')
         if e.note:
-            lines.append(f'DESCRIPTION:{e.note}')
+            lines.append(f'DESCRIPTION:{ical_escape(e.note)}')
         lines.append('END:VEVENT')
     lines.append('END:VCALENDAR')
     return '\r\n'.join(lines) + '\r\n'
@@ -573,21 +653,21 @@ def shared_view(token):
     user = User.query.filter_by(share_token=token).first()
     if not user: return 'Not found', 404
     events = Event.query.filter_by(user_id=user.id).all()
-    html = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shared Schedule</title>'
-    html += '<style>body{font-family:system-ui;background:#f8f5f0;padding:1.5rem;color:#2d2a24}'
-    html += 'h1{font-size:1.3rem}h2{font-size:1rem;margin-top:1.5rem;color:#6a5f52}'
-    html += '.ev{background:#fff;border-radius:10px;padding:.6rem .8rem;margin:.3rem 0;box-shadow:0 1px 4px rgba(0,0,0,.06)}'
-    html += '.ev .t{font-weight:600}.ev .s{font-size:.8rem;color:#8a7a6a}</style></head><body>'
-    html += f'<h1>📅 {user.username}\'s Schedule</h1>'
+    h = '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shared Schedule</title>'
+    h += '<style>body{font-family:system-ui;background:#f8f5f0;padding:1.5rem;color:#2d2a24}'
+    h += 'h1{font-size:1.3rem}h2{font-size:1rem;margin-top:1.5rem;color:#6a5f52}'
+    h += '.ev{background:#fff;border-radius:10px;padding:.6rem .8rem;margin:.3rem 0;box-shadow:0 1px 4px rgba(0,0,0,.06)}'
+    h += '.ev .t{font-weight:600}.ev .s{font-size:.8rem;color:#8a7a6a}</style></head><body>'
+    h += f'<h1>📅 {html.escape(user.username)}\'s Schedule</h1>'
     days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
     for di in range(7):
         day_evs = [e for e in events if e.day == di]
         if not day_evs: continue
-        html += f'<h2>{days[di]}</h2>'
+        h += f'<h2>{days[di]}</h2>'
         for e in sorted(day_evs, key=lambda x: x.start_time):
-            html += f'<div class="ev"><div class="t">{e.title}</div><div class="s">{e.start_time}–{e.end_time}</div></div>'
-    html += '</body></html>'
-    return html
+            h += f'<div class="ev"><div class="t">{html.escape(e.title)}</div><div class="s">{html.escape(e.start_time)}–{html.escape(e.end_time)}</div></div>'
+    h += '</body></html>'
+    return h
 
 # ─── Background notifier ───
 def _start_notifier():
@@ -606,14 +686,15 @@ if BOT_TOKEN:
     try:
         r = requests.post(f"{TELEGRAM_API}/setWebhook", json={
             'url': WEBHOOK_URL,
-            'allowed_updates': ['message']
+            'allowed_updates': ['message'],
+            'secret_token': WEBHOOK_SECRET
         }, timeout=10)
         if r.ok:
-            print(f"[Bot] Webhook set to {WEBHOOK_URL}")
+            logging.info(f"[Bot] Webhook set to {WEBHOOK_URL}")
         else:
-            print(f"[Bot] Webhook failed: {r.text}")
+            logging.error(f"[Bot] Webhook failed: {r.text}")
     except Exception as e:
-        print(f"[Bot] Webhook setup error: {e}")
+        logging.error(f"[Bot] Webhook setup error: {e}")
 
 _start_notifier()
 

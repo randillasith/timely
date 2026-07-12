@@ -2,8 +2,8 @@
 Notification checker — runs in background thread.
 Checks for upcoming events every 60s and sends Telegram alerts.
 """
-import os, time, requests
-from datetime import datetime
+import os, time, requests, logging
+from datetime import datetime, timezone
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -18,7 +18,7 @@ def send_telegram(chat_id, text):
         }, timeout=10)
         return r.ok
     except Exception as e:
-        print(f"[Notifier] Telegram error: {e}")
+        logging.error(f"[Notifier] Telegram error: {e}")
         return False
 
 
@@ -35,7 +35,7 @@ def check_and_notify(app):
         from app import User, Event, db
         while True:
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 cd = now.weekday()
                 for u in User.query.filter(User.telegram_notify == True).all():
                     for e in Event.query.filter(
@@ -59,5 +59,5 @@ def check_and_notify(app):
                         e.notified = False
                 db.session.commit()
             except Exception as ex:
-                print(f"[Notifier] {ex}")
+                logging.error(f"[Notifier] {ex}")
             time.sleep(60)

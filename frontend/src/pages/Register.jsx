@@ -33,7 +33,7 @@ export default function Register() {
           <label>Username</label>
           <input value={u} onChange={e=>setU(e.target.value)} placeholder="Choose a username" autoFocus />
           <label>Password</label>
-          <input type="password" value={p} onChange={e=>setP(e.target.value)} placeholder="At least 4 chars" />
+          <input type="password" value={p} onChange={e=>setP(e.target.value)} placeholder="At least 8 chars" />
           <label>Confirm Password</label>
           <input type="password" value={c} onChange={e=>setC(e.target.value)} placeholder="Re-enter password" />
           <button type="submit" className="btn-primary">Create Account</button>

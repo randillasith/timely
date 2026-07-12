@@ -116,7 +116,7 @@ export default function Timetable() {
         onClose={() => setCatModal(false)}
       />}
 
-      {settingsModal && <SettingsPanel onClose={() => setSettingsModal(false)} />}
+      {settingsModal && <SettingsPanel onClose={() => setSettingsModal(false)} onImport={load} />}
     </div>
   );
 }

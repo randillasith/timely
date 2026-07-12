@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings } from '../api';
 
-export default function SettingsPanel({ onClose }) {
+export default function SettingsPanel({ onClose, onImport }) {
   const [tab, setTab] = useState('export');
   const [shareUrl, setShareUrl] = useState('');
   const [icalUrl, setIcalUrl] = useState('');
@@ -38,7 +38,8 @@ export default function SettingsPanel({ onClose }) {
       const text = await file.text();
       const data = JSON.parse(text);
       const res = await importJson(data);
-      setImportResult(res.message + ' — refresh the page!');
+      setImportResult(res.message);
+      if (onImport) onImport();  // Auto-refresh data
     } catch(err) {
       setImportResult('Error: ' + err.message);
     }
