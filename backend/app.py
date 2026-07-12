@@ -206,7 +206,9 @@ def spa_fallback():
     if os.path.isfile(filepath):
         return None
     # Everything else → serve index.html (SPA routing)
-    return app.send_static_file('index.html')
+    response = app.send_static_file('index.html')
+    response.headers['Cache-Control'] = 'no-store, must-revalidate'
+    return response
 
 @app.after_request
 def security_headers(response):
