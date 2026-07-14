@@ -48,6 +48,7 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     is_admin = db.Column(db.Boolean, default=False)
     timezone = db.Column(db.String(50), default='UTC')
+    push_token = db.Column(db.String(100), default='')
 
 class BotState(db.Model):
     __tablename__ = 'bot_state'
@@ -135,6 +136,7 @@ def migrate_db():
             ('created_at', 'DATETIME', None),
             ('is_admin', 'BOOLEAN', '0'),
             ('timezone', 'VARCHAR(50)', "'UTC'"),
+            ('push_token', 'VARCHAR(100)', "''"),
         ],
         'events': [
             ('category', 'VARCHAR(50)', "'task'"),
@@ -534,6 +536,18 @@ def update_notify_settings():
     if user.telegram_chat_id and user.telegram_notify:
         _confirm_bot(user.telegram_chat_id)
     return jsonify({'message': 'Settings updated'})
+
+
+@app.route('/api/push-token', methods=['PUT'])
+def register_push_token():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    data = request.get_json()
+    if not data or not data.get('expo_push_token'):
+        return jsonify({'error': 'Token required'}), 400
+    user.push_token = data['expo_push_token'].strip()[:100]
+    db.session.commit()
+    return jsonify({'message': 'Push token registered'})
 
 
 @app.route('/api/change-password', methods=['PUT'])
