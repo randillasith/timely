@@ -1,8 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
-import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings } from '../api';
+import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings, changePassword, getMe, testNotification, getSemesters, updateEvent, getEvents } from '../api';
 
-export default function SettingsPanel({ onClose, onImport }) {
-  const [tab, setTab] = useState('export');
+const COMMON_TZ = [
+  'UTC',
+  'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dhaka', 'Asia/Kathmandu',
+  'Asia/Singapore', 'Asia/Bangkok', 'Asia/Shanghai', 'Asia/Tokyo',
+  'Asia/Seoul', 'Asia/Dubai', 'Asia/Riyadh', 'Asia/Karachi',
+  'Australia/Perth', 'Australia/Sydney', 'Pacific/Auckland',
+  'Europe/London', 'Europe/Berlin', 'Europe/Paris', 'Europe/Moscow',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+];
+
+export default function SettingsPanel({ onClose, onImport, timezone, onTimezoneChange }) {
+  const [tab, setTab] = useState('profile');
   const [shareUrl, setShareUrl] = useState('');
   const [icalUrl, setIcalUrl] = useState('');
   const [importResult, setImportResult] = useState('');
@@ -10,8 +20,14 @@ export default function SettingsPanel({ onClose, onImport }) {
   const fileRef = useRef();
   const [notifySettings, setNotifySettings] = useState(null);
   const [saved, setSaved] = useState('');
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [pwMsg, setPwMsg] = useState('');
+  const [profile, setProfile] = useState(null);
 
   useEffect(() => {
+    getMe().then(setProfile).catch(() => {});
     getShareInfo().then(d => {
       setShareUrl(d.share_url);
       setIcalUrl(d.ical_url);
@@ -39,7 +55,7 @@ export default function SettingsPanel({ onClose, onImport }) {
       const data = JSON.parse(text);
       const res = await importJson(data);
       setImportResult(res.message);
-      if (onImport) onImport();  // Auto-refresh data
+      if (onImport) onImport();
     } catch(err) {
       setImportResult('Error: ' + err.message);
     }
@@ -63,19 +79,85 @@ export default function SettingsPanel({ onClose, onImport }) {
     window.open('/api/ical', '_blank');
   };
 
+  const handleChangePassword = async e => {
+    e.preventDefault(); setPwMsg('');
+    if (pwNew !== pwConfirm) { setPwMsg('New passwords do not match'); return; }
+    if (pwNew.length < 8) { setPwMsg('New password needs 8+ characters'); return; }
+    try {
+      const res = await changePassword(pwCurrent, pwNew);
+      setPwMsg(res.message || 'Password changed successfully');
+      setPwCurrent(''); setPwNew(''); setPwConfirm('');
+    } catch (err) {
+      setPwMsg(err.message || 'Failed to change password');
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={{maxWidth:'480px'}}>
         <div style={{display:'flex',gap:'.3rem',marginBottom:'1rem',borderBottom:'1px solid var(--border)',paddingBottom:'.5rem'}}>
-          {['export','import','share','ical','notify'].map(t => (
+          {['profile','export','import','share','ical','notify'].map(t => (
             <button key={t} className={`btn btn-sm ${tab===t?'btn-primary':''}`}
               onClick={() => setTab(t)}>
-              {t==='export'?'📤 Export':t==='import'?'📥 Import':t==='share'?'🔗 Share':t==='ical'?'📅 iCal':'🔔 Notify'}
+              {t==='profile'?'👤 Profile':t==='export'?'📤 Export':t==='import'?'📥 Import':t==='share'?'🔗 Share':t==='ical'?'📅 iCal':'🔔 Notify'}
             </button>
           ))}
           <div style={{flex:1}} />
           <button className="btn btn-sm btn-outline" onClick={onClose}>✕</button>
         </div>
+
+        {tab === 'profile' && (
+          <div>
+            <h2 style={{fontSize:'1rem',marginBottom:'.5rem'}}>👤 My Profile</h2>
+            {profile ? (
+              <div style={{fontSize:'.85rem',marginBottom:'1rem',padding:'.6rem',background:'var(--surface2)',borderRadius:'8px'}}>
+                <div><strong>Username:</strong> {profile.username}</div>
+                <div><strong>Email:</strong> {profile.email || '(not set)'}</div>
+              </div>
+            ) : (
+              <p style={{fontSize:'.8rem',color:'var(--text2)'}}>Loading profile...</p>
+            )}
+
+            <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'1rem 0'}} />
+            <h3 style={{fontSize:'.9rem',marginBottom:'.5rem'}}>🌍 Timezone</h3>
+            <p style={{fontSize:'.78rem',color:'var(--text2)',marginBottom:'.5rem'}}>
+              Set your local timezone so the <strong style={{color:'#e74c3c'}}>🔴 current time line</strong> appears correctly on the calendar.
+            </p>
+            <select value={timezone} onChange={async e => {
+              const tz = e.target.value;
+              onTimezoneChange(tz);
+              try {
+                await updateNotifySettings({ timezone: tz });
+              } catch {}
+            }} style={{width:'100%',marginBottom:'.5rem'}}>
+              {COMMON_TZ.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+
+            <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'1rem 0'}} />
+            <h3 style={{fontSize:'.9rem',marginBottom:'.5rem'}}>🔑 Change Password</h3>
+            <form onSubmit={handleChangePassword}>
+              <label>Current Password</label>
+              <input type="password" value={pwCurrent} onChange={e=>setPwCurrent(e.target.value)}
+                placeholder="Enter current password" required />
+              <label>New Password</label>
+              <input type="password" value={pwNew} onChange={e=>setPwNew(e.target.value)}
+                placeholder="At least 8 characters" required minLength={8} />
+              <label>Confirm New Password</label>
+              <input type="password" value={pwConfirm} onChange={e=>setPwConfirm(e.target.value)}
+                placeholder="Re-enter new password" required />
+              {pwMsg && (
+                <div style={{fontSize:'.8rem',padding:'.5rem',marginBottom:'.5rem',borderRadius:'6px',
+                  background: pwMsg.includes('success')?'var(--surface2)':'var(--danger-bg)',
+                  color: pwMsg.includes('success')?'var(--text)':'var(--danger)'}}>
+                  {pwMsg}
+                </div>
+              )}
+              <button type="submit" className="btn btn-primary btn-sm">Change Password</button>
+            </form>
+          </div>
+        )}
 
         {tab === 'export' && (
           <div>
@@ -153,7 +235,7 @@ export default function SettingsPanel({ onClose, onImport }) {
             <p style={{fontSize:'.8rem',color:'var(--text2)',marginBottom:'.8rem'}}>
               Get notified via Telegram before events start. Set per-event timing in the event editor.
             </p>
-            {notifySettings && (
+            {notifySettings ? (
               <form onSubmit={async e => {
                 e.preventDefault();
                 setSaved('');
@@ -162,6 +244,7 @@ export default function SettingsPanel({ onClose, onImport }) {
                     email: notifySettings.email,
                     telegram_notify: notifySettings.telegram_notify,
                     telegram_chat_id: notifySettings.telegram_chat_id,
+                    timezone: notifySettings.timezone,
                   });
                   setSaved('✅ Saved!');
                   setTimeout(() => setSaved(''), 3000);
@@ -186,7 +269,7 @@ export default function SettingsPanel({ onClose, onImport }) {
                   <strong>📋 How to connect:</strong>
                   <ol style={{marginTop:'.3rem',paddingLeft:'1.2rem',lineHeight:1.8}}>
                     <li>Open <a href="https://t.me/RandilTimely_bot" target="_blank" rel="noopener" style={{color:'var(--accent)'}}>@RandilTimely_bot</a> on Telegram</li>
-                    <li>Send <strong>/start</strong> to the bot</li>
+                    <li>Send <strong>{'/start'}</strong> to the bot</li>
                     <li>Copy the <strong>Chat ID</strong> the bot sends you</li>
                     <li>Paste it above and click <strong>Save</strong></li>
                   </ol>
@@ -195,7 +278,16 @@ export default function SettingsPanel({ onClose, onImport }) {
 
                 <button type="submit" className="btn btn-primary">📥 Save & Connect</button>
                 {saved && <span style={{marginLeft:'.5rem',fontSize:'.8rem',color:'var(--text)'}}>{saved}</span>}
+                <button type="button" className="btn btn-sm" style={{marginLeft:'.5rem'}}
+                  onClick={async () => {
+                    try {
+                      const res = await testNotification();
+                      alert(res.message);
+                    } catch(err) { alert('❌ ' + err.message); }
+                  }}>📨 Test Notification</button>
               </form>
+            ) : (
+              <p style={{fontSize:'.8rem',color:'var(--text2)'}}>Loading settings...</p>
             )}
           </div>
         )}

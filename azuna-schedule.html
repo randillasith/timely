@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Azuna · Weekly Schedule</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #f8f5f0; color: #2d2a24; padding: 1.5rem; min-height: 100vh;
+  }
+  .header { max-width: 1200px; margin: 0 auto 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+  .header h1 { font-size: 1.6rem; font-weight: 600; color: #4a3f35; display: flex; align-items: center; gap: 0.5rem; }
+  .header h1 span { color: #c4956a; }
+  .header-sub { color: #8a7a6a; font-size: 0.85rem; }
+  .header-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .btn { padding: 0.45rem 1rem; border: 1px solid #d5c8bc; border-radius: 8px; background: #fff; color: #4a3f35; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; display: inline-flex; align-items: center; gap: 0.35rem; }
+  .btn:hover { background: #f0e8df; border-color: #c4956a; }
+  .btn-primary { background: #c4956a; color: #fff; border-color: #c4956a; }
+  .btn-primary:hover { background: #b08055; }
+  .btn-danger { color: #c0392b; border-color: #e8c8c4; }
+  .btn-danger:hover { background: #fdf0ed; border-color: #c0392b; }
+  .week-bar { max-width: 1200px; margin: 0 auto 1rem; display: flex; align-items: center; gap: 1rem; }
+  .week-bar button { background: none; border: 1px solid #d5c8bc; border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; color: #4a3f35; font-size: 1rem; }
+  .week-bar button:hover { background: #f0e8df; }
+  .week-label { font-size: 0.9rem; color: #6a5f52; font-weight: 500; }
+  .calendar-wrap { max-width: 1200px; margin: 0 auto; background: #fff; border-radius: 16px; box-shadow: 0 2px 20px rgba(0,0,0,0.06); overflow-x: auto; position: relative; }
+  .calendar { display: grid; grid-template-columns: 70px repeat(5, 1fr); min-width: 700px; }
+
+  /* ── Overlay layer (outside the grid) ── */
+  .overlay-layer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 5; }
+  .day-header {
+    padding: 0.6rem 0.3rem; text-align: center; font-weight: 600; font-size: 0.85rem; color: #4a3f35;
+    background: #fcfaf8; border-bottom: 2px solid #e8dfd6; position: sticky; top: 0; z-index: 2;
+  }
+  .day-header small { display: block; font-weight: 400; font-size: 0.7rem; color: #9a8f85; }
+  .time-slot {
+    height: 50px; border-bottom: 1px solid #f5f0eb;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem; color: #6a5f52; font-weight: 600; background: #fcfaf8;
+  }
+  .hour-row { height: 50px; border-bottom: 1px solid #f5f0eb; cursor: pointer; }
+  .hour-row:hover { background: #fdfbf9; }
+
+  /* ── Event overlay per day column ── */
+  .day-overlay { position: absolute; pointer-events: none; z-index: 5; }
+
+  .event {
+    position: absolute; left: 3px; right: 3px;
+    border-radius: 8px; padding: 4px 8px; overflow: hidden;
+    font-size: 0.7rem; line-height: 1.3; cursor: pointer;
+    transition: box-shadow 0.15s; border: 1px solid transparent;
+    display: flex; flex-direction: column; justify-content: center;
+    min-height: 28px; pointer-events: auto;
+  }
+  .event:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+  .event .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .event .sub { font-size: 0.6rem; opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .event .time-label { font-size: 0.55rem; opacity: 0.7; }
+  .event-class { background: #e8e0f0; color: #4a3070; border-color: #d0c0e0; }
+  .event-task { background: #f5e6d8; color: #5a3a20; border-color: #e8d0bc; }
+  .event-movie { background: #f0d8d8; color: #6a2020; border-color: #e0c0c0; }
+  .event-nap { background: #d8e8e8; color: #205050; border-color: #c0d8d8; }
+  .event-oop { background: #d8e8d0; color: #205020; border-color: #c0d8b8; }
+  .event-db { background: #d8d0e8; color: #302060; border-color: #c0b8d8; }
+  .event-travel { background: #f0ece4; color: #5a4a3a; border-color: #e0d8ce; }
+
+  /* ── Modal ── */
+  .modal-overlay { display: none; position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.35); align-items: center; justify-content: center; padding: 1rem; }
+  .modal-overlay.active { display: flex; }
+  .modal { background: #fff; border-radius: 16px; padding: 1.5rem; width: 100%; max-width: 420px; box-shadow: 0 8px 40px rgba(0,0,0,0.15); animation: fadeUp 0.2s ease; }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+  .modal h2 { font-size: 1.15rem; color: #4a3f35; margin-bottom: 1rem; }
+  .modal label { display: block; font-size: 0.8rem; color: #6a5f52; margin-bottom: 0.25rem; font-weight: 500; }
+  .modal input, .modal select, .modal textarea { width: 100%; padding: 0.55rem 0.7rem; border: 1px solid #d5c8bc; border-radius: 8px; font-size: 0.85rem; margin-bottom: 0.85rem; background: #fcfaf8; font-family: inherit; }
+  .modal input:focus, .modal select:focus, .modal textarea:focus { outline: none; border-color: #c4956a; box-shadow: 0 0 0 3px rgba(196,149,106,0.15); }
+  .modal textarea { resize: vertical; min-height: 60px; }
+  .modal .row { display: flex; gap: 0.75rem; }
+  .modal .row > * { flex: 1; }
+  .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.5rem; }
+  .legend { max-width: 1200px; margin: 1rem auto 0; display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; font-size: 0.75rem; color: #6a5f52; }
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.08); }
+
+  @media (max-width: 900px) {
+    body { padding: 1rem; }
+    .calendar { grid-template-columns: 55px repeat(5, 1fr); min-width: unset; }
+    .time-slot { font-size: 0.65rem; }
+    .event { font-size: 0.6rem; padding: 2px 5px; }
+    .event .sub { display: none; }
+    .day-header { font-size: 0.75rem; }
+  }
+  @media (max-width: 600px) {
+    .calendar { grid-template-columns: 45px repeat(5, 1fr); }
+    .time-slot { height: 42px; font-size: 0.55rem; }
+    .hour-row { height: 42px; }
+    .event { font-size: 0.5rem; padding: 1px 3px; min-height: 22px; }
+    .event .title { font-size: 0.5rem; }
+    .event .time-label { display: none; }
+    .day-header { font-size: 0.65rem; padding: 0.4rem 0.1rem; }
+    .day-header small { display: none; }
+    .header h1 { font-size: 1.2rem; }
+    .modal { padding: 1rem; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>✦ <span>Azuna</span> · Weekly Schedule</h1>
+    <div class="header-sub">Y2 Semester 1 · SLIIT</div>
+  </div>
+  <div class="header-actions">
+    <button class="btn" onclick="resetToDefault()">↺ Reset Default</button>
+    <button class="btn btn-primary" onclick="openAddModal()">+ Add Task</button>
+  </div>
+</div>
+
+<div class="week-bar">
+  <button onclick="changeWeek(-1)">◀️</button>
+  <span class="week-label" id="weekLabel">This Week</span>
+  <button onclick="changeWeek(1)">▶️</button>
+  <button class="btn" onclick="goToToday()" style="margin-left:0.5rem;font-size:0.8rem;">Today</button>
+</div>
+
+<div class="calendar-wrap" id="calendarWrap">
+  <div class="calendar" id="calendar"></div>
+  <div class="overlay-layer" id="overlayLayer"></div>
+</div>
+
+<div class="legend">
+  <span class="legend-item"><span class="legend-swatch" style="background:#e8e0f0;"></span> Class</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#f5e6d8;"></span> Study</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#f0d8d8;"></span> Movie</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#d8e8e8;"></span> Nap</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#d8e8d0;"></span> OOP</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#d8d0e8;"></span> DB</span>
+  <span class="legend-item"><span class="legend-swatch" style="background:#f0ece4;"></span> Travel</span>
+  <span class="legend-item" style="margin-left:auto;opacity:0.5;">Click slot → add · Click task → edit</span>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h2 id="modalTitle">Add Task</h2>
+    <form id="taskForm" onsubmit="saveTask(event)">
+      <label for="taskTitle">Title</label>
+      <input type="text" id="taskTitle" placeholder="e.g. Study OOP" required>
+      <label for="taskDay">Day</label>
+      <select id="taskDay">
+        <option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option>
+      </select>
+      <div class="row">
+        <div><label for="taskStart">Start</label><input type="time" id="taskStart" required></div>
+        <div><label for="taskEnd">End</label><input type="time" id="taskEnd" required></div>
+      </div>
+      <label for="taskCategory">Category</label>
+      <select id="taskCategory">
+        <option value="task">📚 Study Task</option>
+        <option value="movie">🎬 Movie</option>
+        <option value="nap">😴 Nap</option>
+        <option value="oop">📺 OOP Videos</option>
+        <option value="db">🗄 Database</option>
+        <option value="travel">🚶 Travel</option>
+        <option value="other">📌 Other</option>
+      </select>
+      <label for="taskNote">Note (optional)</label>
+      <textarea id="taskNote" placeholder="Extra details..."></textarea>
+      <input type="hidden" id="taskEditId" value="">
+      <div class="modal-actions">
+        <button type="button" class="btn" onclick="closeModal()">Cancel</button>
+        <button type="button" class="btn btn-danger" id="deleteBtn" style="display:none;" onclick="deleteTask()">Delete</button>
+        <button type="submit" class="btn btn-primary" id="saveBtn">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+// ═══ DATA ═══
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday'];
+const HOURS = ['8AM','9AM','10AM','11AM','12PM','1PM','2PM','3PM','4PM','5PM','6PM','7PM','8PM','9PM'];
+const START_HOUR = 8;
+const END_HOUR = 21;
+const ROW_HEIGHT = 50;  // px per hour row
+
+const DEFAULT_CLASSES = [
+  { day:0, title:'IT2012-AIML Lecture', sub:'AI/ML Lecture', start:'8:30', end:'10:30', category:'class' },
+  { day:1, title:'SE2030-SE Lab', sub:'201 Lab', start:'8:30', end:'10:30', category:'class' },
+  { day:1, title:'SE2030-SE Tutorial', sub:'505 Lec Hall', start:'14:30', end:'15:30', category:'class' },
+  { day:1, title:'IT2120-PS Lecture', sub:'505 Lec Hall', start:'15:30', end:'17:30', category:'class' },
+  { day:2, title:'SE2030-SE Lecture', sub:'505 Lec Hall', start:'10:30', end:'12:30', category:'class' },
+  { day:2, title:'IT2140-DDD Lecture', sub:'402 Lec Hall', start:'14:30', end:'15:30', category:'class' },
+  { day:2, title:'IT2140-DDD Lab', sub:'201 Lab', start:'15:30', end:'16:30', category:'class' },
+  { day:3, title:'IT2140-DDD Tutorial', sub:'505 Lec Hall', start:'8:30', end:'9:30', category:'class' },
+  { day:3, title:'IT2012-AIML Workshop', sub:'505 Lec Hall', start:'10:30', end:'12:30', category:'class' },
+  { day:3, title:'IT2120-PS Tutorial', sub:'505 Lec Hall', start:'15:30', end:'17:30', category:'class' },
+  { day:4, title:'IT2011-AI/ML Lab', sub:'201 Lab', start:'11:30', end:'12:30', category:'class' },
+  { day:4, title:'IT2120-PS Lab', sub:'201 Lab', start:'15:30', end:'17:30', category:'class' },
+];
+
+const DEFAULT_TASKS = [
+  { day:0, title:'🎬 Movie Time', start:'9:00', end:'11:00', category:'movie', note:'Enjoy!' },
+  { day:0, title:'📖 Review IT2120 PS', start:'11:00', end:'12:00', category:'task' },
+  { day:0, title:'📝 Tute Work', start:'13:00', end:'14:30', category:'task' },
+  { day:0, title:'😴 Nap', start:'14:30', end:'15:30', category:'nap' },
+  { day:0, title:'📺 OOP Videos', start:'15:30', end:'17:00', category:'oop' },
+  { day:0, title:'🗄 Database Study', start:'17:00', end:'18:00', category:'db' },
+  { day:1, title:'📖 Review SE2030 Lab', start:'10:30', end:'11:30', category:'task' },
+  { day:1, title:'📝 Tute Work', start:'11:30', end:'12:30', category:'task' },
+  { day:1, title:'📺 OOP Videos', start:'12:30', end:'14:00', category:'oop' },
+  { day:1, title:'😴 Nap', start:'17:30', end:'18:30', category:'nap' },
+  { day:1, title:'📖 Review IT2120', start:'18:30', end:'19:30', category:'task' },
+  { day:1, title:'🗄 Database', start:'19:30', end:'20:30', category:'db' },
+  { day:1, title:'🎬 Movie / Relax', start:'20:30', end:'21:30', category:'movie' },
+  { day:2, title:'📖 Review SE2030 Lec', start:'12:30', end:'13:30', category:'task' },
+  { day:2, title:'📝 Tutes', start:'13:30', end:'14:30', category:'task' },
+  { day:2, title:'😴 Nap', start:'16:30', end:'17:30', category:'nap' },
+  { day:2, title:'📖 Review IT2140', start:'17:30', end:'18:30', category:'task' },
+  { day:2, title:'📺 OOP Videos', start:'18:30', end:'19:30', category:'oop' },
+  { day:2, title:'🗄 Database', start:'19:30', end:'20:30', category:'db' },
+  { day:2, title:'🎬 Movie', start:'20:30', end:'21:30', category:'movie' },
+  { day:3, title:'📖 Review IT2140 Tut', start:'9:30', end:'10:30', category:'task' },
+  { day:3, title:'📖 Review AIML Work', start:'12:30', end:'13:30', category:'task' },
+  { day:3, title:'📺 OOP Videos', start:'13:30', end:'15:00', category:'oop' },
+  { day:3, title:'😴 Nap', start:'17:30', end:'18:30', category:'nap' },
+  { day:3, title:'📖 Review IT2120 Tut', start:'18:30', end:'19:30', category:'task' },
+  { day:3, title:'🗄 Database', start:'19:30', end:'20:30', category:'db' },
+  { day:3, title:'🎬 Movie', start:'20:30', end:'21:30', category:'movie' },
+  { day:4, title:'📖 Review AI/ML Lab', start:'12:30', end:'13:30', category:'task' },
+  { day:4, title:'📝 Tute Catch-up', start:'13:30', end:'15:00', category:'task' },
+  { day:4, title:'😴 Nap', start:'17:30', end:'18:30', category:'nap' },
+  { day:4, title:'📖 Review IT2120 Lab', start:'18:30', end:'19:30', category:'task' },
+  { day:4, title:'🗄 Database', start:'19:30', end:'20:30', category:'db' },
+  { day:4, title:'🎬 Weekend Movie 🎉', start:'20:30', end:'22:00', category:'movie' },
+];
+
+const CAT_STYLES = {
+  class:'event-class', task:'event-task', movie:'event-movie',
+  nap:'event-nap', oop:'event-oop', db:'event-db', travel:'event-travel', other:'event-task'
+};
+
+// ═══ STATE ═══
+let weekOffset = 0;
+let tasks = [];
+function loadData() {
+  try { const s = localStorage.getItem('azuna_timetable_tasks'); tasks = s ? JSON.parse(s) : JSON.parse(JSON.stringify(DEFAULT_TASKS)); }
+  catch { tasks = JSON.parse(JSON.stringify(DEFAULT_TASKS)); }
+}
+function saveData() { localStorage.setItem('azuna_timetable_tasks', JSON.stringify(tasks)); }
+
+// ═══ HELPERS ═══
+function t2m(t) { if(!t) return null; const[p,h]=t.split(':'); const a=parseInt(p),b=parseInt(h); if(isNaN(a)||isNaN(b)) return null; return a*60+b; }
+function getMonday(d) { const dt=new Date(d); const dy=dt.getDay(); dt.setDate(dt.getDate()+(dy===0?-6:1-dy)); dt.setHours(0,0,0,0); return dt; }
+function fmtDate(d) { return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0'); }
+
+// ═══ RENDER ═══
+function render() {
+  const cal = document.getElementById('calendar');
+  cal.innerHTML = '';
+
+  const now = new Date();
+  const monday = getMonday(now); monday.setDate(monday.getDate() + weekOffset * 7);
+  const dates = DAYS.map((_,i) => { const d = new Date(monday); d.setDate(d.getDate()+i); return d; });
+
+  // Week label
+  if (weekOffset===0) document.getElementById('weekLabel').textContent='This Week';
+  else if (weekOffset===-1) document.getElementById('weekLabel').textContent='Last Week';
+  else if (weekOffset===1) document.getElementById('weekLabel').textContent='Next Week';
+  else document.getElementById('weekLabel').textContent='Week '+(weekOffset>0?'+':'')+weekOffset;
+
+  const allEvents = [...DEFAULT_CLASSES.map(e=>({...e,fixed:true})), ...tasks.map((e,i)=>({...e,index:i,fixed:false}))];
+
+  // ── Header row ──
+  const th = el('div','day-header'); th.style.background='#f8f5f0'; th.textContent='Time'; cal.appendChild(th);
+  DAYS.forEach((day,i)=>{
+    const h = el('div','day-header');
+    h.innerHTML = day+' <small>'+fmtDate(dates[i])+'</small>';
+    const t=new Date();
+    if(dates[i].getDate()===t.getDate()&&dates[i].getMonth()===t.getMonth()&&dates[i].getFullYear()===t.getFullYear()) h.style.background='#f5ede4';
+    cal.appendChild(h);
+  });
+
+  // ── Time rows ──
+  for(let hi=0; hi<HOURS.length; hi++){
+    const ts = el('div','time-slot'); ts.textContent=HOURS[hi]; cal.appendChild(ts);
+    for(let di=0; di<5; di++){
+      const cell = el('div','hour-row');
+      cell.onclick = ()=>openAddModal(di, hi+START_HOUR);
+      cal.appendChild(cell);
+    }
+  }
+
+  // ── Event overlays ──
+  const gridStart = START_HOUR * 60;   // 480
+  const gridEnd = END_HOUR * 60;       // 1260
+  const totalMin = gridEnd - gridStart; // 780
+
+  requestAnimationFrame(() => {
+    const layer = document.getElementById('overlayLayer');
+    layer.innerHTML = '';
+    // Group events by day
+    const byDay = [[],[],[],[],[]];
+    allEvents.forEach(ev => { if(ev.day>=0&&ev.day<5) byDay[ev.day].push(ev); });
+
+    byDay.forEach((evs, di) => {
+      if (!evs.length) return;
+      // Find the first and last cell for this day to get dimensions
+      const firstCell = cal.children[6 + 1 + di]; // first hour row, day di
+      const lastIdx = 6 + (HOURS.length-1) * 6 + 1 + di;
+      const lastCell = cal.children[lastIdx];
+      const left = firstCell.offsetLeft;
+      const width = firstCell.offsetWidth;
+      // Use ACTUAL rendered row height and overlay position from DOM
+      const rowH = firstCell.offsetHeight; // actual CSS height (handles responsive)
+      const overlayH = lastCell.offsetTop + rowH - firstCell.offsetTop;
+      const overlayTop = firstCell.offsetTop;
+
+      const overlay = el('div','day-overlay');
+      overlay.style.cssText = `left:${left}px;top:${overlayTop}px;width:${width}px;height:${overlayH}px;`;
+      layer.appendChild(overlay);
+
+      evs.forEach(ev => {
+        const sm = t2m(ev.start), em = t2m(ev.end);
+        if (sm===null||em===null||em<=sm) return;
+
+        // Position: percentage within the overlay
+        // overlay spans from gridStart (480min) to gridEnd (1260min)
+        const topPct = ((sm - gridStart) / totalMin) * 100;
+        const hPct = Math.max(((em - sm) / totalMin) * 100, 3);
+
+        const cat = ev.category||'task';
+        const cls = CAT_STYLES[cat]||'event-task';
+        const e = el('div','event '+cls);
+        e.style.cssText = `position:absolute;top:${topPct}%;height:${hPct}%;left:3px;right:3px;pointer-events:auto;`;
+
+        let icon='';
+        if(cat==='movie') icon='🎬 '; else if(cat==='nap') icon='😴 ';
+        else if(cat==='oop') icon='📺 '; else if(cat==='db') icon='🗄 ';
+        else if(cat==='travel') icon='🚶 '; else if(cat==='class') icon='📚 ';
+
+        e.innerHTML = '<div class="title">'+icon+ev.title+'</div>'
+          +(ev.sub?'<div class="sub">'+ev.sub+'</div>':'')
+          +'<div class="time-label">'+ev.start+'–'+ev.end+'</div>';
+
+        if(!ev.fixed){
+          e.style.cursor='pointer';
+          e.onclick = (ev2)=>{ ev2.stopPropagation(); openEditModal(ev.index); };
+        }
+        overlay.appendChild(e);
+      });
+    });
+  });
+}
+
+function el(tag, cls) { const e=document.createElement(tag); if(cls) e.className=cls; return e; }
+
+// ═══ MODAL ═══
+function openAddModal(day, hour){
+  document.getElementById('modalTitle').textContent='Add Task';
+  document.getElementById('taskEditId').value='';
+  document.getElementById('deleteBtn').style.display='none';
+  document.getElementById('saveBtn').textContent='Add';
+  document.getElementById('taskTitle').value='';
+  document.getElementById('taskNote').value='';
+  document.getElementById('taskCategory').value='task';
+  if(day!==undefined&&hour!==undefined){
+    document.getElementById('taskDay').value=day;
+    document.getElementById('taskStart').value=String(hour).padStart(2,'0')+':00';
+    document.getElementById('taskEnd').value=String(Math.min(hour+1,END_HOUR)).padStart(2,'0')+':00';
+  }else{
+    document.getElementById('taskDay').value='0';
+    document.getElementById('taskStart').value='09:00';
+    document.getElementById('taskEnd').value='10:00';
+  }
+  document.getElementById('modalOverlay').classList.add('active');
+}
+function openEditModal(index){
+  const ev=tasks[index]; if(!ev) return;
+  document.getElementById('modalTitle').textContent='Edit Task';
+  document.getElementById('taskEditId').value=index;
+  document.getElementById('deleteBtn').style.display='inline-block';
+  document.getElementById('saveBtn').textContent='Update';
+  document.getElementById('taskTitle').value=ev.title||'';
+  document.getElementById('taskDay').value=ev.day;
+  document.getElementById('taskStart').value=ev.start||'09:00';
+  document.getElementById('taskEnd').value=ev.end||'10:00';
+  document.getElementById('taskCategory').value=ev.category||'task';
+  document.getElementById('taskNote').value=ev.note||'';
+  document.getElementById('modalOverlay').classList.add('active');
+}
+function closeModal(){ document.getElementById('modalOverlay').classList.remove('active'); }
+function saveTask(e){
+  e.preventDefault();
+  const t=document.getElementById('taskTitle').value.trim();
+  const d=parseInt(document.getElementById('taskDay').value);
+  const s=document.getElementById('taskStart').value;
+  const en=document.getElementById('taskEnd').value;
+  const c=document.getElementById('taskCategory').value;
+  const n=document.getElementById('taskNote').value.trim();
+  const id=document.getElementById('taskEditId').value;
+  if(!t) return;
+  const task={day:d,title:t,start:s,end:en,category:c,note:n||undefined};
+  if(id!=='') tasks[parseInt(id)]=task; else tasks.push(task);
+  saveData(); closeModal(); render();
+}
+function deleteTask(){
+  const id=document.getElementById('taskEditId').value; if(id==='') return;
+  if(!confirm('Delete?')) return;
+  tasks.splice(parseInt(id),1); saveData(); closeModal(); render();
+}
+function changeWeek(d){ weekOffset+=d; render(); }
+function goToToday(){ weekOffset=0; render(); }
+function resetToDefault(){
+  if(!confirm('Reset all tasks?')) return;
+  tasks=JSON.parse(JSON.stringify(DEFAULT_TASKS)); saveData(); render();
+}
+document.getElementById('modalOverlay').onclick=function(e){ if(e.target===this) closeModal(); };
+
+loadData(); render();
+</script>
+</body>
+</html>

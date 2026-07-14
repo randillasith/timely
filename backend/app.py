@@ -46,11 +46,35 @@ class User(db.Model):
     ical_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     share_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    is_admin = db.Column(db.Boolean, default=False)
+    timezone = db.Column(db.String(50), default='UTC')
 
 class BotState(db.Model):
     __tablename__ = 'bot_state'
     chat_id = db.Column(db.String(50), primary_key=True)
     welcome_message_id = db.Column(db.Integer, default=None)
+
+class AppSettings(db.Model):
+    __tablename__ = 'app_settings'
+    key = db.Column(db.String(50), primary_key=True)
+    value = db.Column(db.Text, default='')
+
+class GlobalPreset(db.Model):
+    __tablename__ = 'global_presets'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), nullable=False)
+    color = db.Column(db.String(7), nullable=False, default='#c4956a')
+    icon = db.Column(db.String(10), nullable=False, default='📌')
+    sort_order = db.Column(db.Integer, default=0)
+
+class Announcement(db.Model):
+    __tablename__ = 'announcements'
+    id = db.Column(db.Integer, primary_key=True)
+    message = db.Column(db.Text, nullable=False)
+    type = db.Column(db.String(20), default='banner')  # banner | telegram
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sent_at = db.Column(db.DateTime, default=None)
 
 class Category(db.Model):
     __tablename__ = 'categories'
@@ -74,6 +98,7 @@ class Event(db.Model):
     repeat = db.Column(db.String(10), default='none')
     notify_before = db.Column(db.Integer, default=None)
     notified = db.Column(db.Boolean, default=False)
+    semester = db.Column(db.String(50), default='')
 
 # ─── Safe Migration ───
 def migrate_db():
@@ -107,6 +132,8 @@ def migrate_db():
             ('ical_token', 'VARCHAR(36)', "''"),
             ('share_token', 'VARCHAR(36)', "''"),
             ('created_at', 'DATETIME', None),
+            ('is_admin', 'BOOLEAN', '0'),
+            ('timezone', 'VARCHAR(50)', "'UTC'"),
         ],
         'events': [
             ('category', 'VARCHAR(50)', "'task'"),
@@ -115,6 +142,7 @@ def migrate_db():
             ('repeat', 'VARCHAR(10)', "'none'"),
             ('notify_before', 'INTEGER', 'NULL'),
             ('notified', 'BOOLEAN', '0'),
+            ('semester', 'VARCHAR(50)', "''"),
         ],
         'categories': [
             ('color', 'VARCHAR(7)', "'#c4956a'"),
@@ -266,6 +294,8 @@ def register():
     user = User(username=username, password_hash=generate_password_hash(password), email=email)
     db.session.add(user)
     db.session.commit()
+    if email:
+        threading.Thread(target=send_welcome_email, args=(email, username), daemon=True).start()
     session['user_id'] = user.id
     session['username'] = user.username
     return jsonify({'message': 'Registered', 'username': user.username}), 201
@@ -282,9 +312,6 @@ def login():
         return jsonify({'error': 'Invalid credentials'}), 401
     session['user_id'] = user.id
     session['username'] = user.username
-    # Send welcome email in background thread
-    if user.email:
-        threading.Thread(target=send_welcome_email, args=(user.email, user.username), daemon=True).start()
     return jsonify({'message': 'Logged in', 'username': user.username, 'theme': user.theme})
 
 @app.route('/api/logout', methods=['POST'])
@@ -300,7 +327,9 @@ def api_me():
         'username': user.username, 'theme': user.theme,
         'email': user.email,
         'telegram_notify': user.telegram_notify, 'telegram_chat_id': user.telegram_chat_id,
-        'share_token': user.share_token, 'ical_token': user.ical_token
+        'share_token': user.share_token, 'ical_token': user.ical_token,
+        'is_admin': user.is_admin or False,
+        'timezone': user.timezone,
     })
 
 # ─── Theme ───
@@ -485,6 +514,7 @@ def get_notify_settings():
         'email': user.email,
         'telegram_notify': user.telegram_notify,
         'telegram_chat_id': user.telegram_chat_id,
+        'timezone': user.timezone,
     })
 
 @app.route('/api/notify-settings', methods=['PUT'])
@@ -496,11 +526,51 @@ def update_notify_settings():
     if 'email' in data: user.email = data['email'].strip()
     if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
     if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
+    if 'timezone' in data: user.timezone = data['timezone'].strip()
     db.session.commit()
     # If chat_id was just set, confirm connection with bot directly
     if user.telegram_chat_id and user.telegram_notify:
         _confirm_bot(user.telegram_chat_id)
     return jsonify({'message': 'Settings updated'})
+
+@app.route('/api/test-notification', methods=['POST'])
+@limiter.limit("3 per minute")
+def test_notification():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    if not user.telegram_chat_id or not user.telegram_notify:
+        return jsonify({'error': 'Telegram not connected'}), 400
+    sent = telegram_send(user.telegram_chat_id,
+        '🔔 <b>Test Notification</b>\n\nIf you receive this, your Telegram notifications are working correctly! ✅')
+    if sent:
+        return jsonify({'message': 'Test notification sent! ✅'})
+    return jsonify({'error': 'Failed to send. Check your Chat ID.'}), 500
+
+@app.route('/api/semesters', methods=['GET'])
+def get_semesters():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    sems = db.session.query(Event.semester).filter_by(user_id=user.id).distinct().all()
+    sem_list = sorted([s[0] for s in sems if s[0]])
+    return jsonify(sem_list)
+
+@app.route('/api/change-password', methods=['PUT'])
+def change_password():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    data = request.get_json()
+    if not data: return jsonify({'error': 'Invalid request'}), 400
+    current = data.get('current_password', '')
+    new_pass = data.get('new_password', '')
+    if not current or not new_pass:
+        return jsonify({'error': 'Both current and new password required'}), 400
+    if len(new_pass) < 8:
+        return jsonify({'error': 'New password needs 8+ characters'}), 400
+    if not check_password_hash(user.password_hash, current):
+        return jsonify({'error': 'Current password is incorrect'}), 403
+    user.password_hash = generate_password_hash(new_pass)
+    db.session.commit()
+    return jsonify({'message': 'Password changed successfully'})
 
 # ─── Categories ───
 @app.route('/api/categories', methods=['GET'])
@@ -545,15 +615,20 @@ def delete_category(cid):
 
 @app.route('/api/presets')
 def get_presets():
+    """Return global presets from DB, falling back to defaults if empty."""
+    presets = GlobalPreset.query.order_by(GlobalPreset.sort_order).all()
+    if presets:
+        return jsonify([{'id':p.id,'name':p.name,'color':p.color,'icon':p.icon} for p in presets])
+    # Fallback defaults
     return jsonify([
-        {'name':'Study','color':'#f5e6d8','icon':'📚'},
-        {'name':'Class','color':'#e8e0f0','icon':'🏫'},
-        {'name':'Movie','color':'#f0d8d8','icon':'🎬'},
-        {'name':'Nap','color':'#d8e8e8','icon':'😴'},
-        {'name':'OOP Videos','color':'#d8e8d0','icon':'📺'},
-        {'name':'Database','color':'#d8d0e8','icon':'🗄️'},
-        {'name':'Travel','color':'#f0ece4','icon':'🚶'},
-        {'name':'Other','color':'#f5e6d8','icon':'📌'},
+        {'id':0,'name':'Study','color':'#f5e6d8','icon':'📚'},
+        {'id':0,'name':'Class','color':'#e8e0f0','icon':'🏫'},
+        {'id':0,'name':'Movie','color':'#f0d8d8','icon':'🎬'},
+        {'id':0,'name':'Nap','color':'#d8e8e8','icon':'😴'},
+        {'id':0,'name':'OOP Videos','color':'#d8e8d0','icon':'📺'},
+        {'id':0,'name':'Database','color':'#d8d0e8','icon':'🗄️'},
+        {'id':0,'name':'Travel','color':'#f0ece4','icon':'🚶'},
+        {'id':0,'name':'Other','color':'#f5e6d8','icon':'📌'},
     ])
 
 # ─── Events ───
@@ -561,12 +636,16 @@ def get_presets():
 def get_events():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
-    events = Event.query.filter_by(user_id=user.id).all()
+    query = Event.query.filter_by(user_id=user.id)
+    sem = request.args.get('semester', '')
+    if sem:
+        query = query.filter_by(semester=sem)
+    events = query.all()
     return jsonify([{
         'id':e.id,'day':e.day,'title':e.title,
         'start':e.start_time,'end':e.end_time,
         'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat,
-        'notify_before':e.notify_before
+        'notify_before':e.notify_before, 'semester':e.semester or '',
     } for e in events])
 
 @app.route('/api/events', methods=['POST'])
@@ -586,7 +665,8 @@ def create_event():
         color=data.get('color') or None,
         note=data.get('note','')[:2000],
         repeat=data.get('repeat','none'),
-        notify_before=data.get('notify_before')
+        notify_before=data.get('notify_before'),
+        semester=data.get('semester','')[:50],
     )
     db.session.add(event)
     db.session.commit()
@@ -611,6 +691,7 @@ def update_event(eid):
     if 'note' in data: event.note = data['note'][:2000]
     if 'repeat' in data: event.repeat = data['repeat']
     if 'notify_before' in data: event.notify_before = data.get('notify_before')
+    if 'semester' in data: event.semester = data['semester'][:50]
     db.session.commit()
     return jsonify({'message': 'Updated'})
 
@@ -780,6 +861,337 @@ def shared_view(token):
             h += f'<div class="ev"><div class="t">{html.escape(e.title)}</div><div class="s">{html.escape(e.start_time)}–{html.escape(e.end_time)}</div></div>'
     h += '</body></html>'
     return h
+
+# ─── Public: Active Banner Announcements ───
+@app.route('/api/announcements/active')
+def get_active_announcements():
+    """Return active banner announcements for all users."""
+    now = datetime.now(timezone.utc)
+    announcements = Announcement.query.filter_by(active=True, type='banner').all()
+    return jsonify([{
+        'id': a.id, 'message': a.message,
+        'created_at': a.created_at.isoformat() if a.created_at else None,
+    } for a in announcements])
+
+# ─── Admin Routes ───
+def _admin_check():
+    """Returns (user, None) or (None, error_response)."""
+    if 'user_id' not in session:
+        return None, (jsonify({'error': 'Not logged in'}), 401)
+    user = db.session.get(User, session['user_id'])
+    if not user or not user.is_admin:
+        return None, (jsonify({'error': 'Admin access required'}), 403)
+    return user, None
+
+@app.route('/api/admin/users')
+def admin_list_users():
+    """List all users with event counts."""
+    _, err = _admin_check()
+    if err: return err
+    users = User.query.order_by(User.created_at.desc()).all()
+    result = []
+    for u in users:
+        event_count = Event.query.filter_by(user_id=u.id).count()
+        result.append({
+            'id': u.id, 'username': u.username, 'email': u.email,
+            'theme': u.theme, 'is_admin': u.is_admin,
+            'telegram_chat_id': u.telegram_chat_id,
+            'event_count': event_count,
+            'created_at': u.created_at.isoformat() if u.created_at else None,
+        })
+    return jsonify(result)
+
+@app.route('/api/admin/users/<int:uid>', methods=['DELETE'])
+def admin_delete_user(uid):
+    """Delete a user and all their data."""
+    _, err = _admin_check()
+    if err: return err
+    user = db.session.get(User, uid)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    if user.is_admin:
+        return jsonify({'error': 'Cannot delete another admin'}), 403
+    username = user.username
+    # Delete events, categories, bot state
+    Event.query.filter_by(user_id=uid).delete()
+    Category.query.filter_by(user_id=uid).delete()
+    if user.telegram_chat_id:
+        BotState.query.filter_by(chat_id=user.telegram_chat_id).delete()
+    db.session.delete(user)
+    db.session.commit()
+    return jsonify({'message': f'User "{username}" and all their data deleted'})
+
+@app.route('/api/admin/stats')
+def admin_stats():
+    """System statistics."""
+    _, err = _admin_check()
+    if err: return err
+    return jsonify({
+        'total_users': User.query.count(),
+        'total_events': Event.query.count(),
+        'total_categories': Category.query.count(),
+        'total_admins': User.query.filter_by(is_admin=True).count(),
+    })
+
+@app.route('/api/admin/bot-settings', methods=['GET'])
+def admin_get_bot_settings():
+    """Get current bot config (token masked)."""
+    _, err = _admin_check()
+    if err: return err
+    token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    masked = token[:8] + '...' + token[-4:] if len(token) > 12 else ''
+    return jsonify({
+        'bot_token_masked': masked,
+        'bot_token_exists': bool(token),
+        'webhook_url': os.environ.get('WEBHOOK_URL', ''),
+    })
+
+@app.route('/api/admin/bot-settings', methods=['PUT'])
+def admin_update_bot_settings():
+    """Update bot token and webhook — writes env.conf + restarts service."""
+    _, err = _admin_check()
+    if err: return err
+    data = request.get_json()
+    if not data: return jsonify({'error': 'Invalid request'}), 400
+
+    new_token = data.get('bot_token', '').strip()
+    new_webhook = data.get('webhook_url', '').strip()
+
+    if not new_token:
+        return jsonify({'error': 'Bot token required'}), 400
+    if not new_webhook:
+        new_webhook = 'https://timely.randillasith.me/api/bot-webhook'
+
+    # Update env.conf
+    env_path = '/etc/systemd/system/timetable.service.d/env.conf'
+    try:
+        with open(env_path) as f:
+            content = f.read()
+        # Replace TELEGRAM_BOT_TOKEN line
+        import re
+        content = re.sub(
+            r'TELEGRAM_BOT_TOKEN=[^\n]*',
+            f'TELEGRAM_BOT_TOKEN={new_token}',
+            content
+        )
+        content = re.sub(
+            r'WEBHOOK_URL=[^\n]*',
+            f'WEBHOOK_URL={new_webhook}',
+            content
+        )
+        # Write via temp file + sudo
+        import tempfile, subprocess, os as _os
+        tmp = tempfile.NamedTemporaryFile(mode='w', delete=False, dir='/tmp')
+        tmp.write(content)
+        tmp.close()
+        subprocess.run(['sudo', 'cp', tmp.name, env_path], check=True)
+        _os.unlink(tmp.name)
+        subprocess.run(['sudo', 'systemctl', 'daemon-reload'], check=True)
+        subprocess.run(['sudo', 'systemctl', 'restart', 'timetable.service'], check=True)
+        return jsonify({'message': 'Bot token updated — service restarted. Re-login if disconnected.'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to update: {e}'}), 500
+
+# ─── Admin: User Actions ───
+@app.route('/api/admin/users/<int:uid>/reset-password', methods=['PUT'])
+def admin_reset_password(uid):
+    """Generate a temp password for a user."""
+    _, err = _admin_check()
+    if err: return err
+    user = db.session.get(User, uid)
+    if not user: return jsonify({'error': 'User not found'}), 404
+    import secrets, string
+    chars = string.ascii_letters + string.digits
+    temp_pw = ''.join(secrets.choice(chars) for _ in range(10))
+    user.password_hash = generate_password_hash(temp_pw)
+    db.session.commit()
+    return jsonify({'message': f'Password reset for {user.username}', 'temp_password': temp_pw})
+
+@app.route('/api/admin/users/<int:uid>/toggle-admin', methods=['PUT'])
+def admin_toggle_admin(uid):
+    """Toggle admin status for a user (cannot toggle self)."""
+    me, err = _admin_check()
+    if err: return err
+    if me.id == uid: return jsonify({'error': 'Cannot change your own status'}), 400
+    user = db.session.get(User, uid)
+    if not user: return jsonify({'error': 'User not found'}), 404
+    user.is_admin = not user.is_admin
+    db.session.commit()
+    return jsonify({'message': f'{user.username} is now {"admin 👑" if user.is_admin else "user"}'})
+
+# ─── Admin: Analytics ───
+@app.route('/api/admin/analytics')
+def admin_analytics():
+    """Detailed analytics with engagement tracking."""
+    _, err = _admin_check()
+    if err: return err
+    total_users = User.query.count()
+    total_events = Event.query.count()
+    telegram_active = User.query.filter(User.telegram_chat_id != '', User.telegram_notify == True).count()
+    # Database size
+    db_path = os.path.join(INSTANCE_DIR, 'timetable.db')
+    db_size = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+    # Inactive users (no events, registered > 30 days ago)
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    inactive_users = 0
+    for u in User.query.all():
+        if u.created_at and u.created_at.replace(tzinfo=None) < thirty_days_ago:
+            ev = Event.query.filter_by(user_id=u.id).first()
+            if not ev:
+                inactive_users += 1
+    return jsonify({
+        'total_users': total_users,
+        'total_events': total_events,
+        'telegram_active': telegram_active,
+        'db_size_bytes': db_size,
+        'db_size_mb': round(db_size / (1024 * 1024), 2),
+        'inactive_users': inactive_users,
+    })
+
+@app.route('/api/admin/bot-health')
+def admin_bot_health():
+    """Check Telegram bot webhook health."""
+    _, err = _admin_check()
+    if err: return err
+    if not BOT_TOKEN:
+        return jsonify({'healthy': False, 'error': 'No bot token configured', 'webhook': None})
+    try:
+        r = requests.post(f'{TELEGRAM_API}/getWebhookInfo', timeout=10)
+        if r.ok:
+            data = r.json().get('result', {})
+            return jsonify({
+                'healthy': data.get('url', '') != '',
+                'webhook_url': data.get('url', ''),
+                'pending_update_count': data.get('pending_update_count', 0),
+                'last_error_date': data.get('last_error_date'),
+                'last_error_message': data.get('last_error_message'),
+                'max_connections': data.get('max_connections', 40),
+            })
+        return jsonify({'healthy': False, 'error': 'API call failed', 'webhook': None})
+    except Exception as e:
+        return jsonify({'healthy': False, 'error': str(e), 'webhook': None})
+
+# ─── Admin: Global Presets ───
+@app.route('/api/admin/presets')
+def admin_get_presets():
+    _, err = _admin_check()
+    if err: return err
+    presets = GlobalPreset.query.order_by(GlobalPreset.sort_order).all()
+    return jsonify([{'id':p.id,'name':p.name,'color':p.color,'icon':p.icon,'sort_order':p.sort_order} for p in presets])
+
+@app.route('/api/admin/presets', methods=['POST'])
+def admin_create_preset():
+    _, err = _admin_check()
+    if err: return err
+    data = request.get_json()
+    if not data or not data.get('name'): return jsonify({'error': 'Name required'}), 400
+    max_order = db.session.query(db.func.max(GlobalPreset.sort_order)).scalar() or 0
+    preset = GlobalPreset(
+        name=data['name'].strip(), color=data.get('color','#c4956a'),
+        icon=data.get('icon','📌'), sort_order=max_order + 1,
+    )
+    db.session.add(preset); db.session.commit()
+    return jsonify({'id': preset.id, 'message': 'Preset created'}), 201
+
+@app.route('/api/admin/presets/<int:pid>', methods=['PUT'])
+def admin_update_preset(pid):
+    _, err = _admin_check()
+    if err: return err
+    preset = db.session.get(GlobalPreset, pid)
+    if not preset: return jsonify({'error': 'Not found'}), 404
+    data = request.get_json()
+    if 'name' in data: preset.name = data['name'].strip()
+    if 'color' in data: preset.color = data['color']
+    if 'icon' in data: preset.icon = data['icon']
+    if 'sort_order' in data: preset.sort_order = int(data['sort_order'])
+    db.session.commit()
+    return jsonify({'message': 'Preset updated'})
+
+@app.route('/api/admin/presets/<int:pid>', methods=['DELETE'])
+def admin_delete_preset(pid):
+    _, err = _admin_check()
+    if err: return err
+    preset = db.session.get(GlobalPreset, pid)
+    if not preset: return jsonify({'error': 'Not found'}), 404
+    db.session.delete(preset); db.session.commit()
+    return jsonify({'message': 'Preset deleted'})
+
+# ─── Admin: Announcements ───
+@app.route('/api/admin/announcements')
+def admin_list_announcements():
+    _, err = _admin_check()
+    if err: return err
+    anns = Announcement.query.order_by(Announcement.created_at.desc()).all()
+    return jsonify([{
+        'id': a.id, 'message': a.message, 'type': a.type, 'active': a.active,
+        'created_at': a.created_at.isoformat() if a.created_at else None,
+        'sent_at': a.sent_at.isoformat() if a.sent_at else None,
+    } for a in anns])
+
+@app.route('/api/admin/announcements', methods=['POST'])
+def admin_create_announcement():
+    _, err = _admin_check()
+    if err: return err
+    data = request.get_json()
+    if not data or not data.get('message'): return jsonify({'error': 'Message required'}), 400
+    ann = Announcement(
+        message=data['message'].strip(),
+        type=data.get('type', 'banner'),
+        active=data.get('active', True),
+    )
+    db.session.add(ann); db.session.commit()
+    return jsonify({'id': ann.id, 'message': 'Announcement created'}), 201
+
+@app.route('/api/admin/announcements/<int:aid>', methods=['PUT'])
+def admin_update_announcement(aid):
+    _, err = _admin_check()
+    if err: return err
+    ann = db.session.get(Announcement, aid)
+    if not ann: return jsonify({'error': 'Not found'}), 404
+    data = request.get_json()
+    if 'message' in data: ann.message = data['message'].strip()
+    if 'type' in data: ann.type = data['type']
+    if 'active' in data: ann.active = bool(data['active'])
+    db.session.commit()
+    return jsonify({'message': 'Announcement updated'})
+
+@app.route('/api/admin/announcements/<int:aid>', methods=['DELETE'])
+def admin_delete_announcement(aid):
+    _, err = _admin_check()
+    if err: return err
+    ann = db.session.get(Announcement, aid)
+    if not ann: return jsonify({'error': 'Not found'}), 404
+    db.session.delete(ann); db.session.commit()
+    return jsonify({'message': 'Announcement deleted'})
+
+@app.route('/api/admin/announcements/<int:aid>/broadcast', methods=['POST'])
+def admin_broadcast_announcement(aid):
+    """Send a Telegram broadcast to all users with bot enabled."""
+    _, err = _admin_check()
+    if err: return err
+    ann = db.session.get(Announcement, aid)
+    if not ann: return jsonify({'error': 'Not found'}), 404
+    if not ann.message.strip(): return jsonify({'error': 'Empty message'}), 400
+
+    users = User.query.filter(User.telegram_chat_id != '', User.telegram_notify == True).all()
+    sent = 0; failed = 0
+    for u in users:
+        try:
+            r = requests.post(f'{TELEGRAM_API}/sendMessage', json={
+                'chat_id': u.telegram_chat_id,
+                'text': f'📢 <b>Announcement</b>\n\n{ann.message}',
+                'parse_mode': 'HTML',
+            }, timeout=10)
+            if r.ok: sent += 1
+            else: failed += 1
+        except:
+            failed += 1
+    ann.sent_at = datetime.now(timezone.utc)
+    db.session.commit()
+    return jsonify({
+        'message': f'Broadcast sent to {sent} users ({failed} failed)',
+        'sent': sent, 'failed': failed, 'total': len(users),
+    })
 
 # ─── Background notifier ───
 def _start_notifier():

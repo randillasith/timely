@@ -31,3 +31,29 @@ export const getShareInfo = () => req('/share');
 export const refreshTokens = () => req('/share/refresh', { method:'POST' });
 export const getNotifySettings = () => req('/notify-settings');
 export const updateNotifySettings = s => req('/notify-settings', { method:'PUT', body:JSON.stringify(s) });
+export const changePassword = (current, pw) => req('/change-password', { method:'PUT', body:JSON.stringify({current_password:current, new_password:pw}) });
+export const testNotification = () => req('/test-notification', { method:'POST' });
+export const getSemesters = () => req('/semesters');
+export const getEventsBySemester = (sem) => req('/events' + (sem ? `?semester=${encodeURIComponent(sem)}` : ''));
+ 
+// ─── Admin ───
+export const adminGetUsers = () => req('/admin/users');
+export const adminDeleteUser = id => req('/admin/users/'+id, { method:'DELETE' });
+export const adminResetPassword = id => req('/admin/users/'+id+'/reset-password', { method:'PUT' });
+export const adminToggleAdmin = id => req('/admin/users/'+id+'/toggle-admin', { method:'PUT' });
+export const adminGetStats = () => req('/admin/stats');
+export const adminGetAnalytics = () => req('/admin/analytics');
+export const adminGetBotHealth = () => req('/admin/bot-health');
+export const adminGetBotSettings = () => req('/admin/bot-settings');
+export const adminUpdateBotSettings = s => req('/admin/bot-settings', { method:'PUT', body:JSON.stringify(s) });
+export const adminGetPresets = () => req('/admin/presets');
+export const adminCreatePreset = p => req('/admin/presets', { method:'POST', body:JSON.stringify(p) });
+export const adminUpdatePreset = (id, p) => req('/admin/presets/'+id, { method:'PUT', body:JSON.stringify(p) });
+export const adminDeletePreset = id => req('/admin/presets/'+id, { method:'DELETE' });
+export const adminGetAnnouncements = () => req('/admin/announcements');
+export const adminCreateAnnouncement = a => req('/admin/announcements', { method:'POST', body:JSON.stringify(a) });
+export const adminUpdateAnnouncement = (id, a) => req('/admin/announcements/'+id, { method:'PUT', body:JSON.stringify(a) });
+export const adminDeleteAnnouncement = id => req('/admin/announcements/'+id, { method:'DELETE' });
+export const adminBroadcastAnnouncement = id => req('/admin/announcements/'+id+'/broadcast', { method:'POST' });
+// Public
+export const getActiveAnnouncements = () => req('/announcements/active');
