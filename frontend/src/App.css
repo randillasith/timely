@@ -312,6 +312,26 @@ body {
   display: flex;
   align-items: center;
   gap: .35rem;
+  padding: .15rem .35rem;
+  border-radius: 6px;
+  transition: all .15s;
+  user-select: none;
+}
+
+.legend-item.active {
+  background: var(--surface2);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.legend-all {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.legend-all.active {
+  background: var(--accent);
+  color: var(--accent-text);
+  box-shadow: none;
 }
 
 .legend-swatch {

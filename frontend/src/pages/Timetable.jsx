@@ -5,7 +5,7 @@ import AgendaView from '../components/AgendaView';
 import EventModal from '../components/EventModal';
 import ThemePicker from '../components/ThemePicker';
 import SettingsPanel from '../components/SettingsPanel';
-import { getEvents, createEvent, updateEvent, deleteEvent, setTheme as apiSetTheme, getCategories, createCategory, deleteCategory, getPresets, getActiveAnnouncements, getLocations } from '../api';
+import { getEvents, createEvent, updateEvent, deleteEvent, setTheme as apiSetTheme, getCategories, createCategory, deleteCategory, getPresets, getActiveAnnouncements } from '../api';
 
 export default function Timetable() {
   const { user, logout, isAdmin } = useContext(AuthContext);
@@ -22,56 +22,58 @@ export default function Timetable() {
   const [loading, setLoading] = useState(true);
   const [announcements, setAnnouncements] = useState([]);
   const [view, setView] = useState('grid'); // 'grid' | 'agenda'
-  const [locationFilter, setLocationFilter] = useState('');
+  const [catFilter, setCatFilter] = useState([]); // array of selected categories
 
   const load = useCallback(async () => {
     try {
-      const [evs, cats, prs, anns, locs] = await Promise.all([
-        getEvents(), getCategories(), getPresets(), getActiveAnnouncements(), getLocations()
+      const [evs, cats, prs, anns] = await Promise.all([
+        getEvents(), getCategories(), getPresets(), getActiveAnnouncements()
       ]);
-      setEvents(evs); setCategories(cats); setPresets(prs); setAnnouncements(anns); setLocations(locs);
+      setEvents(evs); setCategories(cats); setPresets(prs); setAnnouncements(anns);
     } catch(e) { console.error(e); }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  // Refresh locations after save/delete
-  const refreshLocations = useCallback(async () => {
-    try { setLocations(await getLocations()); } catch(e) {}
+  // ── Filtered events by category ──
+  const filteredEvents = useMemo(() => {
+    if (catFilter.length === 0) return events;
+    return events.filter(e => catFilter.includes(e.category));
+  }, [events, catFilter]);
+
+  const allCats = useMemo(() => {
+    const names = new Set();
+    presets.forEach(p => names.add(p.name.toLowerCase()));
+    categories.forEach(c => names.add(c.name));
+    return [...names].sort();
+  }, [presets, categories]);
+
+  const toggleCatFilter = useCallback((cat) => {
+    setCatFilter(prev =>
+      prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
+    );
   }, []);
 
-  // ── Filtered events ──
-  const filteredEvents = useMemo(() => {
-    if (!locationFilter) return events;
-    return events.filter(e => e.location === locationFilter);
-  }, [events, locationFilter]);
-
   const legendItems = [
-    ...presets.map(p => ({ key: p.name, color: p.color, icon: p.icon, label: p.name })),
-    ...categories.map(c => ({ key: 'cat-'+c.id, color: c.color, icon: c.icon, label: c.name })),
+    ...presets.map(p => ({ key: p.name, color: p.color, icon: p.icon, label: p.name, cat: p.name.toLowerCase() })),
+    ...categories.map(c => ({ key: 'cat-'+c.id, color: c.color, icon: c.icon, label: c.name, cat: c.name })),
   ];
 
   const handleSave = async data => {
     if (modal?.event) await updateEvent(modal.event.id, data);
     else await createEvent(data);
-    setModal(null); load(); refreshLocations();
+    setModal(null); load();
   };
 
   const handleDelete = async () => {
-    if (modal?.event) { await deleteEvent(modal.event.id); setModal(null); load(); refreshLocations(); }
+    if (modal?.event) { await deleteEvent(modal.event.id); setModal(null); load(); }
   };
 
   const handleTheme = async t => { setTheme(t); await apiSetTheme(t).catch(() => {}); };
 
   const handleAddCategory = async (name, color, icon) => { await createCategory({ name, color, icon }); load(); };
   const handleDeleteCategory = async id => { if (!confirm('Delete this category?')) return; await deleteCategory(id); load(); };
-
-  const allLocations = useMemo(() => {
-    const set = new Set(locations);
-    events.forEach(e => { if (e.location) set.add(e.location); });
-    return [...set].sort();
-  }, [locations, events]);
 
   return (
     <div className="timetable-page">
@@ -91,7 +93,7 @@ export default function Timetable() {
         </div>
       </div>
 
-      {/* ─── Week bar + view toggle + location filter ─── */}
+      {/* ─── Week bar + view toggle ─── */}
       <div className="week-bar">
         {view === 'grid' && (
           <>
@@ -114,16 +116,6 @@ export default function Timetable() {
             onClick={() => setView('agenda')}
           >📋 List</button>
         </div>
-
-        {allLocations.length > 0 && (
-          <div className="location-filter">
-            <select value={locationFilter} onChange={e => setLocationFilter(e.target.value)}
-              style={{fontSize:'.78rem',padding:'.25rem .5rem',borderRadius:'6px',border:'1px solid var(--border)',background:'var(--surface)',color:'var(--text)',fontFamily:'inherit',cursor:'pointer'}}>
-              <option value="">📍 All locations</option>
-              {allLocations.map(l => <option key={l} value={l}>📍 {l}</option>)}
-            </select>
-          </div>
-        )}
       </div>
 
       {/* ─── Calendar / Agenda ─── */}
@@ -143,16 +135,32 @@ export default function Timetable() {
         </div>
       )}
 
-      {/* LEGEND */}
+      {/* LEGEND — click to filter by category */}
       {legendItems.length > 0 && (
         <div className="legend">
-          {legendItems.map((item, i) => (
-            <span key={i} className="legend-item">
-              <span className="legend-swatch" style={{background:item.color}}></span>
-              {item.icon} {item.label}
-            </span>
-          ))}
-          <span className="legend-hint">Click slot → add · Click event → edit · Drag to move</span>
+          <span
+            className={`legend-item legend-all${catFilter.length === 0 ? ' active' : ''}`}
+            onClick={() => setCatFilter([])}
+          >📋 All</span>
+          {legendItems.map((item, i) => {
+            const active = catFilter.includes(item.cat);
+            return (
+              <span key={i}
+                className={`legend-item${active ? ' active' : ''}`}
+                onClick={() => toggleCatFilter(item.cat)}
+                style={{ cursor: 'pointer', opacity: catFilter.length === 0 || active ? 1 : 0.45 }}
+              >
+                <span className="legend-swatch" style={{background:item.color, transform: active ? 'scale(1.3)' : 'none'}}></span>
+                {item.icon} {item.label}
+              </span>
+            );
+          })}
+          {catFilter.length > 0 && (
+            <span className="legend-hint">Click category to toggle · Click All to reset</span>
+          )}
+          {catFilter.length === 0 && (
+            <span className="legend-hint">Click slot → add · Click event → edit · Drag to move</span>
+          )}
         </div>
       )}
 
