@@ -3,16 +3,16 @@ import { useMemo } from 'react';
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
 const CAT_COLORS = {
-  lecture:'#e8e0f0', lab:'#d8e0f8', movie:'#f0d8d8',
+  lecture:'#e8e0f0', lab:'#d8e0f0', movie:'#f0d8d8',
   nap:'#d8e8e8', oop_videos:'#d8e8d0', database:'#d8d0e8',
   task:'#f5e6d8', travel:'#f0ece4', class:'#e8e0f0',
-  other:'#f5e6d8'
+  tutorial:'#e0d8f0', other:'#f5e6d8'
 };
 const CAT_ICONS = {
   lecture:'📚', lab:'🔬', movie:'🎬',
   nap:'😴', oop_videos:'📺', database:'🗄️',
   task:'📖', travel:'🚶', class:'📚',
-  other:'📌'
+  tutorial:'📝', other:'📌'
 };
 
 export default function AgendaView({ events, onEventClick }) {

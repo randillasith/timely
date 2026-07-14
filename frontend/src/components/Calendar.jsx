@@ -26,28 +26,28 @@ function fromGridMin(m) {
 }
 
 const CAT_COLORS = {
-  lecture:'#e8e0f0', lab:'#d8e8f0', movie:'#f0d8d8',
+  lecture:'#e8e0f0', lab:'#d8e0f0', movie:'#f0d8d8',
   nap:'#d8e8e8', oop_videos:'#d8e8d0', database:'#d8d0e8',
   task:'#f5e6d8', travel:'#f0ece4', class:'#e8e0f0',
-  other:'#f5e6d8'
+  tutorial:'#e0d8f0', other:'#f5e6d8'
 };
 const CAT_BORDER = {
   lecture:'#8a78b0', lab:'#6aa0c0', movie:'#c08080',
   nap:'#70a8a8', oop_videos:'#78b070', database:'#9080b8',
   task:'#c4956a', travel:'#b09a7a', class:'#8a78b0',
-  other:'#c4956a'
+  tutorial:'#9a80c0', other:'#c4956a'
 };
 const CAT_TEXT_COLORS = {
   lecture:'#3a2040', lab:'#1a3050', movie:'#4a2020',
   nap:'#1a3a3a', oop_videos:'#1a3a20', database:'#2a2050',
   task:'#2d2a24', travel:'#4a3a2a', class:'#3a2040',
-  other:'#2d2a24'
+  tutorial:'#2a2050', other:'#2d2a24'
 };
 const CAT_ICONS = {
   lecture:'📚', lab:'🔬', movie:'🎬',
   nap:'😴', oop_videos:'📺', database:'🗄️',
   task:'📖', travel:'🚶', class:'📚',
-  other:'📌'
+  tutorial:'📝', other:'📌'
 };
 
 function snapMin(m) {

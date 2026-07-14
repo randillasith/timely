@@ -603,6 +603,9 @@ def get_presets():
         return jsonify([{'id':p.id,'name':p.name,'color':p.color,'icon':p.icon} for p in presets])
     # Fallback defaults
     return jsonify([
+        {'id':0,'name':'Lecture','color':'#e8e0f0','icon':'📚'},
+        {'id':0,'name':'Lab','color':'#d8e0f0','icon':'🔬'},
+        {'id':0,'name':'Tutorial','color':'#e0d8f0','icon':'📝'},
         {'id':0,'name':'Study','color':'#f5e6d8','icon':'📚'},
         {'id':0,'name':'Class','color':'#e8e0f0','icon':'🏫'},
         {'id':0,'name':'Movie','color':'#f0d8d8','icon':'🎬'},
