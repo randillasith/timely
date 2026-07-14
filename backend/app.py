@@ -896,6 +896,35 @@ def get_active_announcements():
         'created_at': a.created_at.isoformat() if a.created_at else None,
     } for a in announcements])
 
+# ─── Mobile Sync Endpoint ───
+@app.route('/api/sync')
+def mobile_sync():
+    """Return all events + metadata for mobile app sync."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+
+    events = Event.query.filter_by(user_id=user.id).order_by(Event.day, Event.start_time).all()
+    categories = Category.query.filter_by(user_id=user.id).all()
+
+    # Collect unique locations from events
+    all_locations = sorted(set(
+        e.location.strip() for e in events if e.location and e.location.strip()
+    ))
+
+    return jsonify({
+        'events': [{
+            'id': e.id, 'title': e.title, 'day': e.day,
+            'start_time': e.start_time, 'end_time': e.end_time,
+            'category': e.category or '', 'color': e.color or '#c4956a',
+            'location': e.location or '', 'repeat': e.repeat or 'none',
+            'notify_before': e.notify_before or 15,
+        } for e in events],
+        'categories': [{'name': c.name, 'color': c.color} for c in categories],
+        'locations': all_locations,
+        'announcements': [],
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    })
+
 # ─── Admin Routes ───
 def _admin_check():
     """Returns (user, None) or (None, error_response)."""
