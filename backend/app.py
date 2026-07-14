@@ -49,6 +49,7 @@ class User(db.Model):
     is_admin = db.Column(db.Boolean, default=False)
     timezone = db.Column(db.String(50), default='UTC')
     push_token = db.Column(db.String(100), default='')
+    api_token = db.Column(db.String(64), default='')
 
 class BotState(db.Model):
     __tablename__ = 'bot_state'
@@ -213,8 +214,15 @@ def telegram_delete(chat_id, message_id):
 
 # ─── Helpers ───
 def login_required():
-    if 'user_id' not in session: return None
-    return db.session.get(User, session['user_id'])
+    # Check Flask session first (for web)
+    if 'user_id' in session:
+        return db.session.get(User, session['user_id'])
+    # Check Authorization header (for mobile app)
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        token = auth[7:]
+        return User.query.filter_by(api_token=token).first()
+    return None
 
 def day_name(d):
     return ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][d]
@@ -316,7 +324,13 @@ def login():
         return jsonify({'error': 'Invalid credentials'}), 401
     session['user_id'] = user.id
     session['username'] = user.username
-    return jsonify({'message': 'Logged in', 'username': user.username, 'theme': user.theme})
+    # Generate API token for mobile app
+    user.api_token = secrets.token_hex(32)
+    db.session.commit()
+    return jsonify({
+        'message': 'Logged in', 'username': user.username,
+        'theme': user.theme, 'session': user.api_token
+    })
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
