@@ -189,6 +189,8 @@ export default function Calendar({ events, weekOffset, onSlotClick, onEventClick
   const byDay = useMemo(() => {
     const d = [[],[],[],[],[],[],[]];
     events.forEach(e => {
+      // repeat='none' events only show in current week
+      if (weekOffset !== 0 && e.repeat === 'none') return;
       if (e.day < 7 && e.day >= 0) {
         const s = toGridMin(e.start);
         const eMin = toGridMin(e.end);
@@ -203,7 +205,7 @@ export default function Calendar({ events, weekOffset, onSlotClick, onEventClick
       }
     });
     return d;
-  }, [events, monday, today, isTodayFn]);
+  }, [events, monday, today, isTodayFn, weekOffset]);
 
   return (
     <div className="calendar-wrap" ref={wrapRef}>

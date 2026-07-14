@@ -131,7 +131,7 @@ export default function Timetable() {
         />
       ) : (
         <div className="agenda-container">
-          <AgendaView events={filteredEvents} onEventClick={ev => setModal({ event: ev })} />
+          <AgendaView events={filteredEvents} onEventClick={ev => setModal({ event: ev })} weekOffset={weekOffset} />
         </div>
       )}
 

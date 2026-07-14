@@ -15,15 +15,18 @@ const CAT_ICONS = {
   tutorial:'📝', other:'📌'
 };
 
-export default function AgendaView({ events, onEventClick }) {
+export default function AgendaView({ events, onEventClick, weekOffset }) {
   const sorted = useMemo(() => {
-    const copy = [...events];
+    const filtered = weekOffset !== 0
+      ? events.filter(e => e.repeat === 'weekly')
+      : events;
+    const copy = [...filtered];
     copy.sort((a, b) => {
       if (a.day !== b.day) return a.day - b.day;
       return a.start.localeCompare(b.start);
     });
     return copy;
-  }, [events]);
+  }, [events, weekOffset]);
 
   if (!sorted.length) {
     return (
