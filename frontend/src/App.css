@@ -25,14 +25,7 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
-  padding: 1rem;
   transition: background .3s, color .3s;
-}
-
-@media (max-width: 700px) {
-  .app {
-    padding: .5rem;
-  }
 }
 
 ::-webkit-scrollbar {
@@ -93,15 +86,12 @@ body {
    ═══════════════════════════════════════════════ */
 .header {
   max-width: 1200px;
-  width: 100%;
-  box-sizing: border-box;
   margin: 0 auto 1rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: .5rem;
-  padding: 0 .5rem;
+  gap: .8rem;
 }
 
 .header h1 {
@@ -144,31 +134,14 @@ body {
 .user-badge { font-size: .78rem; color: var(--text2); background: var(--surface2); padding: .25rem .65rem; border-radius: 20px; border: 1px solid var(--border-light); display: inline-flex; align-items: center; gap: .3rem; }
 
 /* ── Week nav ── */
-/* ── View / Week bar ── */
-.view-bar {
+.week-bar {
   max-width: 1200px;
-  width: 100%;
-  box-sizing: border-box;
   margin: 0 auto .8rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: .5rem;
-  padding: 0 .5rem;
-}
-.view-bar-left {
   display: flex;
   align-items: center;
   gap: .4rem;
 }
-.view-bar-right {
-  display: flex;
-  align-items: center;
-  gap: .5rem;
-  flex-wrap: wrap;
-}
-.view-bar button, .view-bar .btn {
+.week-bar button {
   background: none;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -178,41 +151,9 @@ body {
   font-size: .85rem;
   transition: .2s;
 }
-.view-bar button:hover {
+.week-bar button:hover {
   background: var(--cell-hover);
   border-color: var(--accent);
-}
-.view-mode-group {
-  display: flex;
-  gap: 2px;
-  background: var(--surface2);
-  border-radius: 8px;
-  padding: 2px;
-}
-.view-mode-group .btn {
-  border: none;
-  font-size: .75rem;
-  padding: .25rem .5rem;
-  border-radius: 6px;
-}
-.view-mode-group .btn-primary {
-  background: var(--accent);
-  color: #fff;
-}
-.shortcut-hint {
-  font-size: .68rem;
-  color: var(--text3);
-  white-space: nowrap;
-}
-.shortcut-hint kbd {
-  display: inline-block;
-  padding: 1px 4px;
-  font-size: .65rem;
-  font-family: inherit;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  margin: 0 1px;
 }
 
 .week-label {
@@ -235,8 +176,6 @@ body {
    ═══════════════════════════════════════════════ */
 .calendar-wrap {
   max-width: 1200px;
-  width: 100%;
-  box-sizing: border-box;
   margin: 0 auto;
   background: var(--surface);
   border-radius: 16px;
@@ -351,15 +290,12 @@ body {
    ═══════════════════════════════════════════════ */
 .legend {
   max-width: 1200px;
-  width: 100%;
-  box-sizing: border-box;
   margin: .8rem auto 0;
   display: flex;
   flex-wrap: wrap;
   gap: .5rem 1rem;
   font-size: .72rem;
   color: var(--text2);
-  padding: 0 .5rem;
 }
 
 .legend-item {
@@ -787,17 +723,6 @@ input[type="file"]::file-selector-button { padding: .3rem .6rem; border: 1px sol
 
 /* ── Mobile: responsive improvements ── */
 @media (max-width: 700px) {
-  .view-bar {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .view-bar-right {
-    width: 100%;
-    justify-content: flex-start;
-  }
-  .shortcut-hint {
-    display: none;
-  }
   .header h1 {
     font-size: 1rem;
   }

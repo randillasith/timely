@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings, changePassword, getMe, testNotification, getSemesters, updateEvent, getEvents } from '../api';
+import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings, changePassword, getMe } from '../api';
 
 const COMMON_TZ = [
   'UTC',
@@ -278,13 +278,6 @@ export default function SettingsPanel({ onClose, onImport, timezone, onTimezoneC
 
                 <button type="submit" className="btn btn-primary">📥 Save & Connect</button>
                 {saved && <span style={{marginLeft:'.5rem',fontSize:'.8rem',color:'var(--text)'}}>{saved}</span>}
-                <button type="button" className="btn btn-sm" style={{marginLeft:'.5rem'}}
-                  onClick={async () => {
-                    try {
-                      const res = await testNotification();
-                      alert(res.message);
-                    } catch(err) { alert('❌ ' + err.message); }
-                  }}>📨 Test Notification</button>
               </form>
             ) : (
               <p style={{fontSize:'.8rem',color:'var(--text2)'}}>Loading settings...</p>
