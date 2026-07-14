@@ -151,7 +151,14 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  padding: 1rem;
   transition: background .3s, color .3s;
+}
+
+@media (max-width: 700px) {
+  .app {
+    padding: .5rem;
+  }
 }
 
 ::-webkit-scrollbar {
@@ -339,12 +346,15 @@ body {
    ═══════════════════════════════════════════════ */
 .header {
   max-width: 1200px;
+  width: 100%;
+  box-sizing: border-box;
   margin: 0 auto 1rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: .8rem;
+  gap: .5rem;
+  padding: 0 .5rem;
 }
 
 .header h1 {
@@ -385,12 +395,15 @@ body {
 /* ── View / Week bar ── */
 .view-bar {
   max-width: 1200px;
+  width: 100%;
+  box-sizing: border-box;
   margin: 0 auto .8rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: .5rem;
+  padding: 0 .5rem;
 }
 .view-bar-left {
   display: flex;
@@ -487,6 +500,8 @@ body {
    ═══════════════════════════════════════════════ */
 .calendar-wrap {
   max-width: 1200px;
+  width: 100%;
+  box-sizing: border-box;
   margin: 0 auto;
   background: var(--surface);
   border-radius: 16px;
@@ -669,12 +684,15 @@ body {
    ═══════════════════════════════════════════════ */
 .legend {
   max-width: 1200px;
+  width: 100%;
+  box-sizing: border-box;
   margin: .8rem auto 0;
   display: flex;
   flex-wrap: wrap;
   gap: .5rem 1rem;
   font-size: .72rem;
   color: var(--text2);
+  padding: 0 .5rem;
 }
 
 .legend-item {
