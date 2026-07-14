@@ -47,6 +47,7 @@ class User(db.Model):
     share_token = db.Column(db.String(36), default=lambda: str(uuid.uuid4()))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     is_admin = db.Column(db.Boolean, default=False)
+    timezone = db.Column(db.String(50), default='UTC')
 
 class BotState(db.Model):
     __tablename__ = 'bot_state'
@@ -97,6 +98,7 @@ class Event(db.Model):
     repeat = db.Column(db.String(10), default='none')
     notify_before = db.Column(db.Integer, default=None)
     notified = db.Column(db.Boolean, default=False)
+    semester = db.Column(db.String(50), default='')
 
 # ─── Safe Migration ───
 def migrate_db():
@@ -131,6 +133,7 @@ def migrate_db():
             ('share_token', 'VARCHAR(36)', "''"),
             ('created_at', 'DATETIME', None),
             ('is_admin', 'BOOLEAN', '0'),
+            ('timezone', 'VARCHAR(50)', "'UTC'"),
         ],
         'events': [
             ('category', 'VARCHAR(50)', "'task'"),
@@ -139,6 +142,7 @@ def migrate_db():
             ('repeat', 'VARCHAR(10)', "'none'"),
             ('notify_before', 'INTEGER', 'NULL'),
             ('notified', 'BOOLEAN', '0'),
+            ('semester', 'VARCHAR(50)', "''"),
         ],
         'categories': [
             ('color', 'VARCHAR(7)', "'#c4956a'"),
@@ -325,6 +329,7 @@ def api_me():
         'telegram_notify': user.telegram_notify, 'telegram_chat_id': user.telegram_chat_id,
         'share_token': user.share_token, 'ical_token': user.ical_token,
         'is_admin': user.is_admin or False,
+        'timezone': user.timezone,
     })
 
 # ─── Theme ───
@@ -509,6 +514,7 @@ def get_notify_settings():
         'email': user.email,
         'telegram_notify': user.telegram_notify,
         'telegram_chat_id': user.telegram_chat_id,
+        'timezone': user.timezone,
     })
 
 @app.route('/api/notify-settings', methods=['PUT'])
@@ -520,11 +526,33 @@ def update_notify_settings():
     if 'email' in data: user.email = data['email'].strip()
     if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
     if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
+    if 'timezone' in data: user.timezone = data['timezone'].strip()
     db.session.commit()
     # If chat_id was just set, confirm connection with bot directly
     if user.telegram_chat_id and user.telegram_notify:
         _confirm_bot(user.telegram_chat_id)
     return jsonify({'message': 'Settings updated'})
+
+@app.route('/api/test-notification', methods=['POST'])
+@limiter.limit("3 per minute")
+def test_notification():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    if not user.telegram_chat_id or not user.telegram_notify:
+        return jsonify({'error': 'Telegram not connected'}), 400
+    sent = telegram_send(user.telegram_chat_id,
+        '🔔 <b>Test Notification</b>\n\nIf you receive this, your Telegram notifications are working correctly! ✅')
+    if sent:
+        return jsonify({'message': 'Test notification sent! ✅'})
+    return jsonify({'error': 'Failed to send. Check your Chat ID.'}), 500
+
+@app.route('/api/semesters', methods=['GET'])
+def get_semesters():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    sems = db.session.query(Event.semester).filter_by(user_id=user.id).distinct().all()
+    sem_list = sorted([s[0] for s in sems if s[0]])
+    return jsonify(sem_list)
 
 @app.route('/api/change-password', methods=['PUT'])
 def change_password():
@@ -608,12 +636,16 @@ def get_presets():
 def get_events():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
-    events = Event.query.filter_by(user_id=user.id).all()
+    query = Event.query.filter_by(user_id=user.id)
+    sem = request.args.get('semester', '')
+    if sem:
+        query = query.filter_by(semester=sem)
+    events = query.all()
     return jsonify([{
         'id':e.id,'day':e.day,'title':e.title,
         'start':e.start_time,'end':e.end_time,
         'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat,
-        'notify_before':e.notify_before
+        'notify_before':e.notify_before, 'semester':e.semester or '',
     } for e in events])
 
 @app.route('/api/events', methods=['POST'])
@@ -633,7 +665,8 @@ def create_event():
         color=data.get('color') or None,
         note=data.get('note','')[:2000],
         repeat=data.get('repeat','none'),
-        notify_before=data.get('notify_before')
+        notify_before=data.get('notify_before'),
+        semester=data.get('semester','')[:50],
     )
     db.session.add(event)
     db.session.commit()
@@ -658,6 +691,7 @@ def update_event(eid):
     if 'note' in data: event.note = data['note'][:2000]
     if 'repeat' in data: event.repeat = data['repeat']
     if 'notify_before' in data: event.notify_before = data.get('notify_before')
+    if 'semester' in data: event.semester = data['semester'][:50]
     db.session.commit()
     return jsonify({'message': 'Updated'})
 

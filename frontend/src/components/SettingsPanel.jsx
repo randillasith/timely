@@ -1,8 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
-import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings, changePassword, getMe } from '../api';
+import { exportJson, importJson, getShareInfo, refreshTokens, getNotifySettings, updateNotifySettings, changePassword, getMe, testNotification, getSemesters, updateEvent, getEvents } from '../api';
 
-export default function SettingsPanel({ onClose, onImport }) {
-  const [tab, setTab] = useState('export');
+const COMMON_TZ = [
+  'UTC',
+  'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dhaka', 'Asia/Kathmandu',
+  'Asia/Singapore', 'Asia/Bangkok', 'Asia/Shanghai', 'Asia/Tokyo',
+  'Asia/Seoul', 'Asia/Dubai', 'Asia/Riyadh', 'Asia/Karachi',
+  'Australia/Perth', 'Australia/Sydney', 'Pacific/Auckland',
+  'Europe/London', 'Europe/Berlin', 'Europe/Paris', 'Europe/Moscow',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+];
+
+export default function SettingsPanel({ onClose, onImport, timezone, onTimezoneChange }) {
+  const [tab, setTab] = useState('profile');
   const [shareUrl, setShareUrl] = useState('');
   const [icalUrl, setIcalUrl] = useState('');
   const [importResult, setImportResult] = useState('');
@@ -45,7 +55,7 @@ export default function SettingsPanel({ onClose, onImport }) {
       const data = JSON.parse(text);
       const res = await importJson(data);
       setImportResult(res.message);
-      if (onImport) onImport();  // Auto-refresh data
+      if (onImport) onImport();
     } catch(err) {
       setImportResult('Error: ' + err.message);
     }
@@ -107,6 +117,24 @@ export default function SettingsPanel({ onClose, onImport }) {
             ) : (
               <p style={{fontSize:'.8rem',color:'var(--text2)'}}>Loading profile...</p>
             )}
+
+            <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'1rem 0'}} />
+            <h3 style={{fontSize:'.9rem',marginBottom:'.5rem'}}>🌍 Timezone</h3>
+            <p style={{fontSize:'.78rem',color:'var(--text2)',marginBottom:'.5rem'}}>
+              Set your local timezone so the <strong style={{color:'#e74c3c'}}>🔴 current time line</strong> appears correctly on the calendar.
+            </p>
+            <select value={timezone} onChange={async e => {
+              const tz = e.target.value;
+              onTimezoneChange(tz);
+              try {
+                await updateNotifySettings({ timezone: tz });
+              } catch {}
+            }} style={{width:'100%',marginBottom:'.5rem'}}>
+              {COMMON_TZ.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+
             <hr style={{border:'none',borderTop:'1px solid var(--border)',margin:'1rem 0'}} />
             <h3 style={{fontSize:'.9rem',marginBottom:'.5rem'}}>🔑 Change Password</h3>
             <form onSubmit={handleChangePassword}>
@@ -207,7 +235,7 @@ export default function SettingsPanel({ onClose, onImport }) {
             <p style={{fontSize:'.8rem',color:'var(--text2)',marginBottom:'.8rem'}}>
               Get notified via Telegram before events start. Set per-event timing in the event editor.
             </p>
-            {notifySettings && (
+            {notifySettings ? (
               <form onSubmit={async e => {
                 e.preventDefault();
                 setSaved('');
@@ -216,6 +244,7 @@ export default function SettingsPanel({ onClose, onImport }) {
                     email: notifySettings.email,
                     telegram_notify: notifySettings.telegram_notify,
                     telegram_chat_id: notifySettings.telegram_chat_id,
+                    timezone: notifySettings.timezone,
                   });
                   setSaved('✅ Saved!');
                   setTimeout(() => setSaved(''), 3000);
@@ -240,7 +269,7 @@ export default function SettingsPanel({ onClose, onImport }) {
                   <strong>📋 How to connect:</strong>
                   <ol style={{marginTop:'.3rem',paddingLeft:'1.2rem',lineHeight:1.8}}>
                     <li>Open <a href="https://t.me/RandilTimely_bot" target="_blank" rel="noopener" style={{color:'var(--accent)'}}>@RandilTimely_bot</a> on Telegram</li>
-                    <li>Send <strong>/start</strong> to the bot</li>
+                    <li>Send <strong>{'/start'}</strong> to the bot</li>
                     <li>Copy the <strong>Chat ID</strong> the bot sends you</li>
                     <li>Paste it above and click <strong>Save</strong></li>
                   </ol>
@@ -249,7 +278,16 @@ export default function SettingsPanel({ onClose, onImport }) {
 
                 <button type="submit" className="btn btn-primary">📥 Save & Connect</button>
                 {saved && <span style={{marginLeft:'.5rem',fontSize:'.8rem',color:'var(--text)'}}>{saved}</span>}
+                <button type="button" className="btn btn-sm" style={{marginLeft:'.5rem'}}
+                  onClick={async () => {
+                    try {
+                      const res = await testNotification();
+                      alert(res.message);
+                    } catch(err) { alert('❌ ' + err.message); }
+                  }}>📨 Test Notification</button>
               </form>
+            ) : (
+              <p style={{fontSize:'.8rem',color:'var(--text2)'}}>Loading settings...</p>
             )}
           </div>
         )}
