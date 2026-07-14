@@ -780,3 +780,124 @@ input[type="file"]::file-selector-button { padding: .3rem .6rem; border: 1px sol
     width: 45px !important;
   }
 }
+
+/* ═══════════════════════════════════════════════
+   AGENDA VIEW
+   ═══════════════════════════════════════════════ */
+.agenda-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: 0 2px 20px var(--shadow);
+  overflow: hidden;
+}
+
+.agenda-view {
+  padding: 0;
+}
+
+.agenda-day-header {
+  background: var(--header-bg);
+  padding: .5rem .8rem;
+  font-weight: 600;
+  font-size: .82rem;
+  color: var(--text);
+  border-bottom: 2px solid var(--border2);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.agenda-event {
+  display: flex;
+  gap: .6rem;
+  padding: .45rem .8rem;
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+  transition: background .1s;
+  border-left: 4px solid transparent;
+}
+
+.agenda-event:hover {
+  background: var(--cell-hover);
+}
+
+.agenda-event-time {
+  font-size: .72rem;
+  color: var(--text3);
+  font-weight: 500;
+  min-width: 80px;
+  padding-top: 1px;
+  flex-shrink: 0;
+}
+
+.agenda-event-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.agenda-event-title {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agenda-event-meta {
+  display: flex;
+  gap: .6rem;
+  flex-wrap: wrap;
+  font-size: .68rem;
+  color: var(--text3);
+  margin-top: 1px;
+}
+
+.agenda-empty {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text3);
+}
+
+/* ═══════════════════════════════════════════════
+   COLLISION WARNING
+   ═══════════════════════════════════════════════ */
+.collision-warning {
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  border-radius: 8px;
+  padding: .5rem .7rem;
+  margin-bottom: .8rem;
+  font-size: .75rem;
+  color: #e65100;
+}
+
+.collision-warning ul {
+  margin: .3rem 0 0 1.2rem;
+  padding: 0;
+}
+
+.collision-warning li {
+  margin: 2px 0;
+}
+
+/* ═══════════════════════════════════════════════
+   VIEW TOGGLE
+   ═══════════════════════════════════════════════ */
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  margin-left: .3rem;
+}
+
+.view-toggle .btn {
+  font-size: .72rem;
+  padding: .2rem .45rem;
+  border-radius: 4px;
+}
+
+/* ═══════════════════════════════════════════════
+   LOCATION FILTER
+   ═══════════════════════════════════════════════ */
+.location-filter {
+  margin-left: auto;
+}

@@ -99,6 +99,7 @@ class Event(db.Model):
     notify_before = db.Column(db.Integer, default=None)
     notified = db.Column(db.Boolean, default=False)
     semester = db.Column(db.String(50), default='')
+    location = db.Column(db.String(100), default='')
 
 # ─── Safe Migration ───
 def migrate_db():
@@ -143,6 +144,7 @@ def migrate_db():
             ('notify_before', 'INTEGER', 'NULL'),
             ('notified', 'BOOLEAN', '0'),
             ('semester', 'VARCHAR(50)', "''"),
+            ('location', 'VARCHAR(100)', "''"),
         ],
         'categories': [
             ('color', 'VARCHAR(7)', "'#c4956a'"),
@@ -612,6 +614,17 @@ def get_presets():
     ])
 
 # ─── Events ───
+@app.route('/api/locations', methods=['GET'])
+def get_locations():
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    rows = db.session.query(Event.location).filter(
+        Event.user_id == user.id,
+        Event.location != '',
+        Event.location.isnot(None)
+    ).distinct().all()
+    return jsonify(sorted([r[0] for r in rows]))
+
 @app.route('/api/events', methods=['GET'])
 def get_events():
     user = login_required()
@@ -622,6 +635,7 @@ def get_events():
         'start':e.start_time,'end':e.end_time,
         'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat,
         'notify_before':e.notify_before, 'semester':e.semester or '',
+        'location':e.location or '',
     } for e in events])
 
 @app.route('/api/events', methods=['POST'])
@@ -643,6 +657,7 @@ def create_event():
         repeat=data.get('repeat','none'),
         notify_before=data.get('notify_before'),
         semester=data.get('semester','')[:50],
+        location=data.get('location','')[:100],
     )
     db.session.add(event)
     db.session.commit()
@@ -668,6 +683,7 @@ def update_event(eid):
     if 'repeat' in data: event.repeat = data['repeat']
     if 'notify_before' in data: event.notify_before = data.get('notify_before')
     if 'semester' in data: event.semester = data['semester'][:50]
+    if 'location' in data: event.location = data['location'][:100]
     db.session.commit()
     return jsonify({'message': 'Updated'})
 

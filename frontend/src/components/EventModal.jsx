@@ -1,6 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
-export default function EventModal({ event, defaultDay, defaultHour, categories, presets, onSave, onDelete, onClose }) {
+function toGridMin(t) {
+  if (!t) return null;
+  const [h, m] = t.split(':').map(Number);
+  if (isNaN(h) || isNaN(m)) return null;
+  let total = h * 60 + m;
+  if (total < 8 * 60) total += 1440;
+  return total;
+}
+
+export default function EventModal({ event, defaultDay, defaultHour, categories, presets, allEvents, onSave, onDelete, onClose }) {
   const isEdit = !!event;
   const [title, setTitle] = useState(event?.title || '');
   const [day, setDay] = useState(event?.day ?? defaultDay ?? 0);
@@ -9,15 +18,34 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
   const [category, setCategory] = useState(event?.category || 'task');
   const [color, setColor] = useState(event?.color || '');
   const [note, setNote] = useState(event?.note || '');
+  const [location, setLocation] = useState(event?.location || '');
   const [repeat, setRepeat] = useState(event?.repeat || 'none');
   const [notifyBefore, setNotifyBefore] = useState(event?.notify_before ?? null);
   const [err, setErr] = useState('');
+  const [collisions, setCollisions] = useState([]);
 
   useEffect(() => {
     const h = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
+
+  // ── Collision detection ──
+  useEffect(() => {
+    if (!allEvents) { setCollisions([]); return; }
+    const s = toGridMin(start);
+    const e = toGridMin(end);
+    if (s === null || e === null || e <= s) { setCollisions([]); return; }
+    const overlaps = allEvents.filter(ev => {
+      if (isEdit && ev.id === event.id) return false;
+      if (ev.day !== day) return false;
+      const es = toGridMin(ev.start);
+      const ee = toGridMin(ev.end);
+      if (es === null || ee === null) return false;
+      return s < ee && e > es;
+    });
+    setCollisions(overlaps);
+  }, [day, start, end, allEvents, isEdit, event?.id]);
 
   const getCatColor = cat => {
     const p = presets.find(c => c.name.toLowerCase() === cat);
@@ -47,7 +75,7 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
     onSave({
       title: title.trim(), day, start, end,
       category, color: color || null, note, repeat,
-      notify_before: notifyBefore
+      notify_before: notifyBefore, location: location.trim()
     });
   };
 
@@ -56,6 +84,19 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
       <div className="modal">
         <h2>{isEdit ? '✏️ Edit Event' : '➕ Add Event'}</h2>
         {err && <div className="error">{err}</div>}
+
+        {/* ── Collision warning ── */}
+        {collisions.length > 0 && (
+          <div className="collision-warning">
+            ⚠️ <strong>Time conflict</strong> with:
+            <ul>
+              {collisions.map(c => (
+                <li key={c.id}>{getCatIcon(c.category)} {c.title} ({c.start}–{c.end})</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <form onSubmit={submit}>
           <label>Title</label>
           <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. Study OOP" autoFocus />
@@ -97,6 +138,9 @@ export default function EventModal({ event, defaultDay, defaultHour, categories,
               <input type="time" value={end} onChange={e=>setEnd(e.target.value)} />
             </div>
           </div>
+
+          <label>📍 Location / Campus</label>
+          <input value={location} onChange={e=>setLocation(e.target.value)} placeholder="e.g. Malabe, Kandy, Online..." />
 
           <div className="form-row">
             <div>

@@ -54,3 +54,4 @@ export const adminDeleteAnnouncement = id => req('/admin/announcements/'+id, { m
 export const adminBroadcastAnnouncement = id => req('/admin/announcements/'+id+'/broadcast', { method:'POST' });
 // Public
 export const getActiveAnnouncements = () => req('/announcements/active');
+export const getLocations = () => req('/locations');
