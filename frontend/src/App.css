@@ -226,6 +226,16 @@ body {
   z-index: 3;
 }
 
+.cal-events-layer .cal-event {
+  pointer-events: auto;
+}
+
+.cal-event.dragging {
+  opacity: 0.4 !important;
+  z-index: 5;
+  cursor: grabbing !important;
+}
+
 /* ── Current time red line ── */
 .cal-now-line {
   position: absolute;
