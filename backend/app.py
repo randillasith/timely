@@ -664,6 +664,7 @@ def get_events():
     return jsonify([{
         'id':e.id,'day':e.day,'title':e.title,
         'start':e.start_time,'end':e.end_time,
+        'start_time':e.start_time,'end_time':e.end_time,
         'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat,
         'notify_before':e.notify_before, 'semester':e.semester or '',
         'location':e.location or '',
