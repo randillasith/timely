@@ -533,26 +533,6 @@ def update_notify_settings():
         _confirm_bot(user.telegram_chat_id)
     return jsonify({'message': 'Settings updated'})
 
-@app.route('/api/test-notification', methods=['POST'])
-@limiter.limit("3 per minute")
-def test_notification():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    if not user.telegram_chat_id or not user.telegram_notify:
-        return jsonify({'error': 'Telegram not connected'}), 400
-    sent = telegram_send(user.telegram_chat_id,
-        '🔔 <b>Test Notification</b>\n\nIf you receive this, your Telegram notifications are working correctly! ✅')
-    if sent:
-        return jsonify({'message': 'Test notification sent! ✅'})
-    return jsonify({'error': 'Failed to send. Check your Chat ID.'}), 500
-
-@app.route('/api/semesters', methods=['GET'])
-def get_semesters():
-    user = login_required()
-    if not user: return jsonify({'error': 'Not logged in'}), 401
-    sems = db.session.query(Event.semester).filter_by(user_id=user.id).distinct().all()
-    sem_list = sorted([s[0] for s in sems if s[0]])
-    return jsonify(sem_list)
 
 @app.route('/api/change-password', methods=['PUT'])
 def change_password():
@@ -636,11 +616,7 @@ def get_presets():
 def get_events():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
-    query = Event.query.filter_by(user_id=user.id)
-    sem = request.args.get('semester', '')
-    if sem:
-        query = query.filter_by(semester=sem)
-    events = query.all()
+    events = Event.query.filter_by(user_id=user.id).all()
     return jsonify([{
         'id':e.id,'day':e.day,'title':e.title,
         'start':e.start_time,'end':e.end_time,

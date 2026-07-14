@@ -32,10 +32,7 @@ export const refreshTokens = () => req('/share/refresh', { method:'POST' });
 export const getNotifySettings = () => req('/notify-settings');
 export const updateNotifySettings = s => req('/notify-settings', { method:'PUT', body:JSON.stringify(s) });
 export const changePassword = (current, pw) => req('/change-password', { method:'PUT', body:JSON.stringify({current_password:current, new_password:pw}) });
-export const testNotification = () => req('/test-notification', { method:'POST' });
-export const getSemesters = () => req('/semesters');
-export const getEventsBySemester = (sem) => req('/events' + (sem ? `?semester=${encodeURIComponent(sem)}` : ''));
- 
+
 // ─── Admin ───
 export const adminGetUsers = () => req('/admin/users');
 export const adminDeleteUser = id => req('/admin/users/'+id, { method:'DELETE' });
