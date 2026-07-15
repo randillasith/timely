@@ -32,7 +32,9 @@ os.makedirs(INSTANCE_DIR, exist_ok=True)
 
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET', secrets.token_hex(16))
+
+# Persistent webhook secret — deferred to init so AppSettings model exists
+WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
 
 # ─── Models ───
 class User(db.Model):
@@ -181,11 +183,23 @@ def migrate_db():
         ],
     }
 
+    # Whitelist-safe table/column names — all from hardcoded dict above
+    allowed_tables = set(model_columns.keys())
+    allowed_col_types = {'VARCHAR', 'TEXT', 'INTEGER', 'BOOLEAN', 'DATETIME'}
+
     for table, cols in model_columns.items():
-        cur.execute(f"PRAGMA table_info({table})")
+        if table not in allowed_tables:
+            continue  # safety: skip untrusted table names
+        try:
+            cur.execute(f"PRAGMA table_info({table})")
+        except Exception:
+            continue
         existing = {row[1] for row in cur.fetchall()}
         for col_name, col_type, default in cols:
-            if col_name not in existing:
+            if col_name not in existing and col_name.isidentifier():
+                base_type = col_type.split('(')[0]
+                if base_type not in allowed_col_types:
+                    continue
                 try:
                     sql = f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
                     if default is not None:
@@ -656,10 +670,22 @@ def update_notify_settings():
     if not user: return jsonify({'error': 'Not logged in'}), 401
     data = request.get_json()
     if not data: return jsonify({'error': 'Invalid request'}), 400
-    if 'email' in data: user.email = data['email'].strip()
+    if 'email' in data:
+        email = data['email'].strip()
+        if email and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+            return jsonify({'error': 'Invalid email format'}), 400
+        if len(email) > 120:
+            return jsonify({'error': 'Email too long (max 120 chars)'}), 400
+        user.email = email
     if 'telegram_notify' in data: user.telegram_notify = bool(data['telegram_notify'])
-    if 'telegram_chat_id' in data: user.telegram_chat_id = data['telegram_chat_id'].strip()
-    if 'timezone' in data: user.timezone = data['timezone'].strip()
+    if 'telegram_chat_id' in data:
+        chat_id = data['telegram_chat_id'].strip()
+        if chat_id and not re.match(r'^-?\d{5,15}$', chat_id):
+            return jsonify({'error': 'Invalid Telegram Chat ID format'}), 400
+        if len(chat_id) > 50:
+            return jsonify({'error': 'Chat ID too long'}), 400
+        user.telegram_chat_id = chat_id
+    if 'timezone' in data: user.timezone = data['timezone'].strip()[:50]
     db.session.commit()
     # If chat_id was just set, confirm connection with bot directly
     if user.telegram_chat_id and user.telegram_notify:
@@ -711,8 +737,15 @@ def create_category():
     if not user: return jsonify({'error': 'Not logged in'}), 401
     data = request.get_json()
     if not data or not data.get('name'): return jsonify({'error': 'Name required'}), 400
-    cat = Category(user_id=user.id, name=data['name'].strip(),
-        color=data.get('color','#c4956a'), icon=data.get('icon','📌'))
+    name = data['name'].strip()[:50]
+    if not name: return jsonify({'error': 'Name required'}), 400
+    color = data.get('color', '#c4956a')
+    if color and not re.match(r'^#[0-9a-fA-F]{6}$', color):
+        return jsonify({'error': 'Invalid color format (use #RRGGBB)'}), 400
+    icon = data.get('icon', '📌')
+    if len(icon) > 10:
+        return jsonify({'error': 'Icon too long (max 10 chars)'}), 400
+    cat = Category(user_id=user.id, name=name, color=color, icon=icon)
     db.session.add(cat); db.session.commit()
     return jsonify({'id': cat.id, 'message': 'Created'}), 201
 
@@ -723,9 +756,18 @@ def update_category(cid):
     cat = Category.query.filter_by(id=cid, user_id=user.id).first()
     if not cat: return jsonify({'error': 'Not found'}), 404
     data = request.get_json()
-    if 'name' in data: cat.name = data['name'].strip()
-    if 'color' in data: cat.color = data['color']
-    if 'icon' in data: cat.icon = data['icon']
+    if 'name' in data:
+        name = data['name'].strip()[:50]
+        if not name: return jsonify({'error': 'Name cannot be empty'}), 400
+        cat.name = name
+    if 'color' in data:
+        if data['color'] and not re.match(r'^#[0-9a-fA-F]{6}$', data['color']):
+            return jsonify({'error': 'Invalid color format (use #RRGGBB)'}), 400
+        cat.color = data['color']
+    if 'icon' in data:
+        if len(data['icon']) > 10:
+            return jsonify({'error': 'Icon too long (max 10 chars)'}), 400
+        cat.icon = data['icon']
     db.session.commit()
     return jsonify({'message': 'Updated'})
 
@@ -898,10 +940,24 @@ def import_json():
     existing = {(e.day, e.title, e.start_time, e.end_time)
                 for e in Event.query.filter_by(user_id=user.id).all()}
     existing_cats = {c.name for c in Category.query.filter_by(user_id=user.id).all()}
-    count = 0; skipped = 0
+    count = 0; skipped = 0; errors = []
     for e in data.get('events', []):
         if not e.get('title'): continue
-        key = (int(e.get('day', 0)), e['title'].strip(), e.get('start', '09:00'), e.get('end', '10:00'))
+        # Validate each event before importing
+        err = validate_event_data({
+            'title': e.get('title'),
+            'day': e.get('day'),
+            'start': e.get('start'),
+            'end': e.get('end'),
+            'category': e.get('category'),
+            'color': e.get('color'),
+            'repeat': e.get('repeat'),
+        }, require_all=True)
+        if err:
+            errors.append(f"\"{e.get('title','')}\": {err}")
+            skipped += 1
+            continue
+        key = (int(e['day']), e['title'].strip(), e.get('start', '09:00'), e.get('end', '10:00'))
         if key in existing:
             skipped += 1; continue
         ev = Event(
@@ -924,7 +980,8 @@ def import_json():
         db.session.add(cat); existing_cats.add(c['name'].strip())
     db.session.commit()
     msg = f'Imported {count} events'
-    if skipped: msg += f' ({skipped} duplicates skipped)'
+    if skipped: msg += f' ({skipped} duplicates/skipped)'
+    if errors: msg += '. Errors: ' + '; '.join(errors[:5])
     return jsonify({'message': msg})
 
 # ─── Webhook Routes ───
@@ -1659,6 +1716,20 @@ def _start_notifier():
 with app.app_context():
     migrate_db()
 
+# Resolve persistent webhook secret (env var > DB > random)
+if not WEBHOOK_SECRET:
+    with app.app_context():
+        try:
+            s = AppSettings.query.filter_by(key='webhook_secret').first()
+            if s and s.value:
+                WEBHOOK_SECRET = s.value
+            else:
+                WEBHOOK_SECRET = secrets.token_hex(16)
+                db.session.add(AppSettings(key='webhook_secret', value=WEBHOOK_SECRET))
+                db.session.commit()
+        except Exception:
+            WEBHOOK_SECRET = secrets.token_hex(16)
+
 # Set Telegram webhook on startup
 if BOT_TOKEN:
     WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'https://timely.randillasith.me/api/bot-webhook')
@@ -1678,4 +1749,4 @@ if BOT_TOKEN:
 _start_notifier()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
