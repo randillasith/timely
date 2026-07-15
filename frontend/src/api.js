@@ -55,3 +55,16 @@ export const adminBroadcastAnnouncement = id => req('/admin/announcements/'+id+'
 // Public
 export const getActiveAnnouncements = () => req('/announcements/active');
 export const getLocations = () => req('/locations');
+
+// ─── Webhooks ───
+export const getWebhooks = () => req('/webhooks');
+export const getWebhook = id => req('/webhooks/'+id);
+export const createWebhook = w => req('/webhooks', { method:'POST', body:JSON.stringify(w) });
+export const updateWebhook = (id, w) => req('/webhooks/'+id, { method:'PUT', body:JSON.stringify(w) });
+export const deleteWebhook = id => req('/webhooks/'+id, { method:'DELETE' });
+export const toggleWebhook = id => req('/webhooks/'+id+'/toggle', { method:'POST' });
+export const testWebhook = id => req('/webhooks/'+id+'/test', { method:'POST' });
+export const getWebhookLogs = (id, limit=50) => req('/webhooks/'+id+'/logs?limit='+limit);
+export const retryWebhook = (id, logId) => req('/webhooks/'+id+'/logs/'+logId+'/retry', { method:'POST' });
+export const getWebhookEvents = () => req('/webhooks/events');
+export const webhookAiAssist = prompt => req('/webhooks/ai-assist', { method:'POST', body:JSON.stringify({prompt}) });

@@ -86,6 +86,7 @@ export default function Timetable() {
           <span className="user-badge">👤 {user}</span>
           <ThemePicker current={theme} onChange={handleTheme} />
           {isAdmin && <a href="/admin" className="btn btn-sm" title="Admin Panel">⚙️ Admin</a>}
+          <a href="/webhooks" className="btn btn-sm" title="Webhooks">🔗 Webhooks</a>
           <button className="btn btn-sm" onClick={() => setSettingsModal(true)} title="Settings">⚙️</button>
           <button className="btn btn-sm" onClick={() => setCatModal(true)}>🏷️</button>
           <button className="btn btn-primary btn-sm" onClick={() => setModal({})}>+ Add</button>

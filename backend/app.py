@@ -1,4 +1,4 @@
-import os, uuid, html, sqlite3, threading, requests, time, re, logging, secrets
+import os, uuid, html, sqlite3, threading, requests, time, re, logging, secrets, json
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, session, jsonify, Response
 from flask_sqlalchemy import SQLAlchemy
@@ -6,6 +6,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
+from webhook_service import dispatch_webhooks_async, WEBHOOK_EVENTS
 
 app = Flask(__name__, static_folder='../frontend/dist', static_url_path='/')
 app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
@@ -102,6 +103,31 @@ class Event(db.Model):
     notified = db.Column(db.Boolean, default=False)
     semester = db.Column(db.String(50), default='')
     location = db.Column(db.String(100), default='')
+
+class Webhook(db.Model):
+    __tablename__ = 'webhooks'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False, default='My Webhook')
+    target_url = db.Column(db.String(500), nullable=False)
+    subscribed_events = db.Column(db.Text, nullable=False, default='[]')  # JSON array
+    secret_key = db.Column(db.String(64), nullable=False)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+class WebhookLog(db.Model):
+    __tablename__ = 'webhook_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    webhook_id = db.Column(db.Integer, db.ForeignKey('webhooks.id'), nullable=False)
+    event_type = db.Column(db.String(50), nullable=False)
+    payload = db.Column(db.Text, default='')
+    response_status = db.Column(db.Integer, default=None)
+    response_time_ms = db.Column(db.Integer, default=None)
+    success = db.Column(db.Boolean, default=False)
+    error_message = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at = db.Column(db.DateTime, default=None)
 
 # ─── Safe Migration ───
 def migrate_db():
@@ -693,6 +719,16 @@ def create_event():
     )
     db.session.add(event)
     db.session.commit()
+    event_type = 'event.created'
+    if event.category in ('task', 'study') and event.repeat == 'none':
+        event_type = 'task.created'
+    dispatch_webhooks_async(event_type, {
+        'id': event.id, 'title': event.title, 'day': event.day,
+        'start': event.start_time, 'end': event.end_time,
+        'category': event.category, 'repeat': event.repeat,
+        'location': event.location, 'note': event.note,
+        'status': 'created',
+    }, user, app)
     return jsonify({'id': event.id, 'message': 'Created'}), 201
 
 @app.route('/api/events/<int:eid>', methods=['PUT'])
@@ -717,6 +753,18 @@ def update_event(eid):
     if 'semester' in data: event.semester = data['semester'][:50]
     if 'location' in data: event.location = data['location'][:100]
     db.session.commit()
+    event_type = 'event.updated'
+    if event.category in ('task', 'study') and event.repeat == 'none':
+        event_type = 'task.updated'
+        if data.get('status') == 'completed' or (not data.get('status') and event.repeat == 'none'):
+            pass  # keep as updated
+    dispatch_webhooks_async(event_type, {
+        'id': event.id, 'title': event.title, 'day': event.day,
+        'start': event.start_time, 'end': event.end_time,
+        'category': event.category, 'repeat': event.repeat,
+        'location': event.location, 'note': event.note,
+        'status': 'updated',
+    }, user, app)
     return jsonify({'message': 'Updated'})
 
 @app.route('/api/events/<int:eid>', methods=['DELETE'])
@@ -725,7 +773,12 @@ def delete_event(eid):
     if not user: return jsonify({'error': 'Not logged in'}), 401
     event = Event.query.filter_by(id=eid, user_id=user.id).first()
     if not event: return jsonify({'error': 'Not found'}), 404
+    ev_data = {'id': event.id, 'title': event.title, 'category': event.category}
     db.session.delete(event); db.session.commit()
+    event_type = 'event.deleted'
+    if ev_data['category'] in ('task', 'study'):
+        event_type = 'task.deleted'
+    dispatch_webhooks_async(event_type, ev_data, user, app)
     return jsonify({'message': 'Deleted'})
 
 # ─── Import / Export ───
@@ -784,6 +837,266 @@ def import_json():
     msg = f'Imported {count} events'
     if skipped: msg += f' ({skipped} duplicates skipped)'
     return jsonify({'message': msg})
+
+# ─── Webhook Routes ───
+@app.route('/api/webhooks', methods=['GET'])
+def list_webhooks():
+    """List user's webhooks."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    whs = Webhook.query.filter_by(user_id=user.id).order_by(Webhook.created_at.desc()).all()
+    return jsonify([{
+        'id': w.id, 'name': w.name, 'target_url': w.target_url,
+        'subscribed_events': json.loads(w.subscribed_events) if isinstance(w.subscribed_events, str) else w.subscribed_events,
+        'secret_key': w.secret_key, 'active': w.active,
+        'created_at': w.created_at.isoformat() if w.created_at else None,
+        'updated_at': w.updated_at.isoformat() if w.updated_at else None,
+    } for w in whs])
+
+@app.route('/api/webhooks', methods=['POST'])
+@limiter.limit("10 per minute")
+def create_webhook():
+    """Create a webhook."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    data = request.get_json()
+    if not data: return jsonify({'error': 'Invalid request'}), 400
+    target_url = (data.get('target_url') or '').strip()
+    if not target_url:
+        return jsonify({'error': 'Target URL is required'}), 400
+    if not target_url.startswith('https://'):
+        return jsonify({'error': 'URL must use HTTPS'}), 400
+    name = (data.get('name') or '').strip() or 'My Webhook'
+    events = data.get('subscribed_events', [])
+    if not events:
+        return jsonify({'error': 'At least one event must be selected'}), 400
+    invalid = [e for e in events if e not in WEBHOOK_EVENTS]
+    if invalid:
+        return jsonify({'error': f'Invalid events: {", ".join(invalid)}'}), 400
+    wh = Webhook(
+        user_id=user.id, name=name,
+        target_url=target_url,
+        subscribed_events=json.dumps(events),
+        secret_key=secrets.token_hex(32),
+        active=True,
+    )
+    db.session.add(wh); db.session.commit()
+    return jsonify({
+        'id': wh.id, 'name': wh.name, 'target_url': wh.target_url,
+        'subscribed_events': events, 'secret_key': wh.secret_key, 'active': wh.active,
+        'created_at': wh.created_at.isoformat() if wh.created_at else None,
+        'message': 'Webhook created',
+    }), 201
+
+@app.route('/api/webhooks/<int:wid>', methods=['GET'])
+def get_webhook(wid):
+    """Get a single webhook."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    wh = Webhook.query.filter_by(id=wid, user_id=user.id).first()
+    if not wh: return jsonify({'error': 'Not found'}), 404
+    return jsonify({
+        'id': wh.id, 'name': wh.name, 'target_url': wh.target_url,
+        'subscribed_events': json.loads(wh.subscribed_events) if isinstance(wh.subscribed_events, str) else wh.subscribed_events,
+        'secret_key': wh.secret_key, 'active': wh.active,
+        'created_at': wh.created_at.isoformat() if wh.created_at else None,
+        'updated_at': wh.updated_at.isoformat() if wh.updated_at else None,
+    })
+
+@app.route('/api/webhooks/<int:wid>', methods=['PUT'])
+def update_webhook(wid):
+    """Update a webhook."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    wh = Webhook.query.filter_by(id=wid, user_id=user.id).first()
+    if not wh: return jsonify({'error': 'Not found'}), 404
+    data = request.get_json()
+    if not data: return jsonify({'error': 'Invalid request'}), 400
+    if 'name' in data:
+        wh.name = data['name'].strip()[:100]
+    if 'target_url' in data:
+        url = data['target_url'].strip()
+        if not url.startswith('https://'):
+            return jsonify({'error': 'URL must use HTTPS'}), 400
+        wh.target_url = url
+    if 'subscribed_events' in data:
+        events = data['subscribed_events']
+        if not events:
+            return jsonify({'error': 'At least one event required'}), 400
+        invalid = [e for e in events if e not in WEBHOOK_EVENTS]
+        if invalid:
+            return jsonify({'error': f'Invalid events: {", ".join(invalid)}'}), 400
+        wh.subscribed_events = json.dumps(events)
+    if 'active' in data:
+        wh.active = bool(data['active'])
+    wh.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+    return jsonify({'message': 'Webhook updated'})
+
+@app.route('/api/webhooks/<int:wid>', methods=['DELETE'])
+def delete_webhook(wid):
+    """Delete a webhook and its logs."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    wh = Webhook.query.filter_by(id=wid, user_id=user.id).first()
+    if not wh: return jsonify({'error': 'Not found'}), 404
+    WebhookLog.query.filter_by(webhook_id=wid).delete()
+    db.session.delete(wh); db.session.commit()
+    return jsonify({'message': 'Webhook deleted'})
+
+@app.route('/api/webhooks/<int:wid>/toggle', methods=['POST'])
+def toggle_webhook(wid):
+    """Enable/disable a webhook."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    wh = Webhook.query.filter_by(id=wid, user_id=user.id).first()
+    if not wh: return jsonify({'error': 'Not found'}), 404
+    wh.active = not wh.active
+    wh.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+    return jsonify({'active': wh.active, 'message': 'Webhook ' + ('enabled' if wh.active else 'disabled')})
+
+@app.route('/api/webhooks/<int:wid>/test', methods=['POST'])
+def test_webhook(wid):
+    """Send a test event to the webhook."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    wh = Webhook.query.filter_by(id=wid, user_id=user.id).first()
+    if not wh: return jsonify({'error': 'Not found'}), 404
+    from webhook_service import dispatch_webhooks
+    dispatch_webhooks('task.completed', {
+        'id': 0, 'title': 'Test Webhook',
+        'status': 'completed', 'note': 'This is a test event from Timely',
+    }, user, app)
+    return jsonify({'message': 'Test event sent'})
+
+@app.route('/api/webhooks/<int:wid>/logs', methods=['GET'])
+def get_webhook_logs(wid):
+    """Get delivery logs for a webhook."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    wh = Webhook.query.filter_by(id=wid, user_id=user.id).first()
+    if not wh: return jsonify({'error': 'Not found'}), 404
+    limit = min(int(request.args.get('limit', 50)), 200)
+    logs = WebhookLog.query.filter_by(webhook_id=wid)\
+        .order_by(WebhookLog.created_at.desc()).limit(limit).all()
+    return jsonify([{
+        'id': l.id, 'event_type': l.event_type,
+        'response_status': l.response_status,
+        'response_time_ms': l.response_time_ms,
+        'success': l.success,
+        'error_message': l.error_message,
+        'created_at': l.created_at.isoformat() if l.created_at else None,
+        'completed_at': l.completed_at.isoformat() if l.completed_at else None,
+    } for l in logs])
+
+@app.route('/api/webhooks/<int:wid>/logs/<int:log_id>/retry', methods=['POST'])
+def retry_webhook(wid, log_id):
+    """Retry a failed webhook delivery."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    wh = Webhook.query.filter_by(id=wid, user_id=user.id).first()
+    if not wh: return jsonify({'error': 'Webhook not found'}), 404
+    log_entry = WebhookLog.query.filter_by(id=log_id, webhook_id=wid).first()
+    if not log_entry: return jsonify({'error': 'Log entry not found'}), 404
+    from webhook_service import _send_webhook, _sign_payload
+    try:
+        payload = json.loads(log_entry.payload)
+    except (json.JSONDecodeError, TypeError):
+        return jsonify({'error': 'Invalid payload in log'}), 500
+    new_log = WebhookLog(
+        webhook_id=wid, event_type=log_entry.event_type,
+        payload=log_entry.payload,
+    )
+    db.session.add(new_log); db.session.commit()
+    _send_webhook(wh, log_entry.event_type, payload, new_log)
+    new_log.completed_at = datetime.now(timezone.utc)
+    db.session.commit()
+    return jsonify({
+        'message': 'Retry completed',
+        'success': new_log.success,
+        'response_status': new_log.response_status,
+        'error_message': new_log.error_message,
+    })
+
+@app.route('/api/webhooks/events', methods=['GET'])
+def list_webhook_events():
+    """Return available webhook events."""
+    return jsonify(WEBHOOK_EVENTS)
+
+@app.route('/api/webhooks/ai-assist', methods=['POST'])
+@limiter.limit("5 per minute")
+def webhook_ai_assist():
+    """Use AI to generate webhook config from natural language."""
+    user = login_required()
+    if not user: return jsonify({'error': 'Not logged in'}), 401
+    data = request.get_json()
+    if not data or not data.get('prompt', '').strip():
+        return jsonify({'error': 'Prompt is required'}), 400
+    prompt = data['prompt'].strip()
+    # Use DeepSeek API if configured, otherwise provide template response
+    ai_key = os.environ.get('DEEPSEEK_API_KEY', '')
+    if ai_key:
+        try:
+            resp = requests.post('https://api.deepseek.com/v1/chat/completions', json={
+                'model': 'deepseek-chat',
+                'messages': [
+                    {'role': 'system', 'content': (
+                        'You are a webhook configuration assistant for Timely scheduling app. '
+                        'Given a natural language request, output JSON only with fields: '
+                        'event (string), url (string), payload (object with field names as keys and descriptions as values). '
+                        'Available events: ' + ', '.join(WEBHOOK_EVENTS)
+                    )},
+                    {'role': 'user', 'content': prompt},
+                ],
+                'temperature': 0.1,
+                'max_tokens': 500,
+            }, headers={
+                'Authorization': f'Bearer {ai_key}',
+                'Content-Type': 'application/json',
+            }, timeout=15)
+            if resp.ok:
+                content = resp.json()['choices'][0]['message']['content']
+                try:
+                    suggestion = json.loads(content)
+                    return jsonify(suggestion)
+                except (json.JSONDecodeError, KeyError):
+                    return jsonify({'suggestion': content, 'note': 'Raw AI response'})
+            return jsonify({'error': 'AI service error: ' + resp.text[:200]}), 502
+        except Exception as e:
+            return jsonify({'error': f'AI request failed: {e}'}), 502
+    # No AI key — provide template suggestion based on keywords
+    prompt_lower = prompt.lower()
+    suggestion = {'event': 'event.created', 'url': '', 'payload': {}}
+    if 'slack' in prompt_lower:
+        suggestion['url'] = 'https://hooks.slack.com/services/...'
+        suggestion['payload'] = {
+            'text': 'New event: {{title}} at {{start}}-{{end}}',
+            'channel': '#schedule',
+        }
+    elif 'discord' in prompt_lower:
+        suggestion['url'] = 'https://discord.com/api/webhooks/...'
+        suggestion['payload'] = {
+            'content': '📅 **{{title}}** — {{start}} to {{end}}',
+            'username': 'Timely Bot',
+        }
+    elif 'telegram' in prompt_lower:
+        suggestion['url'] = 'https://api.telegram.org/bot<TOKEN>/sendMessage'
+        suggestion['payload'] = {
+            'chat_id': '<CHAT_ID>',
+            'text': '📅 {{title}} at {{start}}',
+        }
+    if 'completed' in prompt_lower or 'done' in prompt_lower:
+        suggestion['event'] = 'task.completed'
+    elif 'remind' in prompt_lower or 'notify' in prompt_lower or 'alert' in prompt_lower:
+        suggestion['event'] = 'reminder.triggered'
+    elif 'created' in prompt_lower or 'new' in prompt_lower or 'add' in prompt_lower:
+        suggestion['event'] = 'event.created'
+    elif 'delete' in prompt_lower or 'remove' in prompt_lower:
+        suggestion['event'] = 'event.deleted'
+    elif 'update' in prompt_lower:
+        suggestion['event'] = 'event.updated'
+    return jsonify(suggestion)
 
 # ─── iCal Export ───
 @app.route('/api/ical')

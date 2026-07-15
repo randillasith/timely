@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Timetable from './pages/Timetable';
 import Admin from './pages/Admin';
+import WebhooksPage from './pages/WebhooksPage';
 import { getMe, logout as apiLogout } from './api';
 
 export const AuthContext = createContext(null);
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
               <Route path="/register" element={user ? <Navigate to="/" /> : <Register />} />
               <Route path="/" element={user ? <Timetable /> : <Navigate to="/login" />} />
+              <Route path="/webhooks" element={user ? <WebhooksPage onBack={() => window.history.back()} /> : <Navigate to="/login" />} />
               {isAdmin && <Route path="/admin" element={<Admin />} />}
               <Route path="*" element={<Navigate to="/" />} />
             </Routes>

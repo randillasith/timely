@@ -60,6 +60,7 @@ def fmt_push(event):
 def check_and_notify(app):
     with app.app_context():
         from app import User, Event, db
+        from webhook_service import dispatch_webhooks_async
         while True:
             try:
                 now = datetime.now(timezone.utc)
@@ -85,6 +86,16 @@ def check_and_notify(app):
                                 f"⏰ {e.title}",
                                 fmt_push(e),
                             )
+                            # Trigger webhook
+                            try:
+                                dispatch_webhooks_async('reminder.triggered', {
+                                    'event_id': e.id, 'title': e.title,
+                                    'day': e.day, 'start': e.start_time, 'end': e.end_time,
+                                    'category': e.category, 'location': e.location or '',
+                                    'note': e.note or '',
+                                }, u, app)
+                            except Exception:
+                                pass
                             e.notified = True
                             db.session.commit()
 
