@@ -514,22 +514,111 @@ SMTP_CONFIG = {
 }
 
 def send_welcome_email(to_email, username):
-    """Send welcome email via SMTP. Runs in background thread."""
+    """Send welcome email via SMTP with HTML template. Runs in background thread."""
     if not to_email or not SMTP_CONFIG['pass']:
         return False
     try:
         import smtplib, email.utils
         from email.mime.text import MIMEText
-        body = f"""Hi {username},
-
-Welcome to Timely! 📅
-
-Your schedule is ready to go. Start adding events and we'll send you reminders via Telegram.
-
-Happy scheduling!
-- Timely Team
-"""
-        msg = MIMEText(body)
+        app_url = 'https://timely.randillasith.me'
+        body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Welcome to Timely</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f6f8; font-family:Arial, Helvetica, sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+        <td align="center" style="padding:40px 20px;">
+            <table width="600" cellpadding="0" cellspacing="0"
+                   style="background:#ffffff; border-radius:12px; overflow:hidden;">
+                <!-- Header -->
+                <tr>
+                    <td align="center"
+                        style="background:#2563eb; padding:35px;">
+                        <h1 style="color:#ffffff; margin:0; font-size:32px;">
+                            Timely
+                        </h1>
+                        <p style="color:#dbeafe; margin:10px 0 0; font-size:16px;">
+                            Smart scheduling and reminders
+                        </p>
+                    </td>
+                </tr>
+                <!-- Content -->
+                <tr>
+                    <td style="padding:40px; color:#333333;">
+                        <h2 style="margin-top:0; color:#111827;">
+                            Welcome to Timely, {username}
+                        </h2>
+                        <p style="font-size:16px; line-height:1.6;">
+                            Thank you for joining Timely. Your account has been
+                            successfully created and your schedule is ready.
+                        </p>
+                        <p style="font-size:16px; line-height:1.6;">
+                            Start adding your events, tasks, and important dates.
+                            Timely will help you stay organized by sending
+                            reminders directly through Telegram.
+                        </p>
+                        <!-- Feature Box -->
+                        <table width="100%" cellpadding="0" cellspacing="0"
+                               style="background:#f1f5f9; border-radius:8px; margin:25px 0;">
+                            <tr>
+                                <td style="padding:20px;">
+                                    <h3 style="margin:0 0 10px; color:#1e40af;">
+                                        Get started
+                                    </h3>
+                                    <p style="margin:0; line-height:1.6;">
+                                        • Create your first event<br>
+                                        • Set reminders<br>
+                                        • Receive notifications through Telegram
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+                        <!-- Button -->
+                        <div style="text-align:center; margin:30px 0;">
+                            <a href="{app_url}"
+                               style="
+                               background:#2563eb;
+                               color:white;
+                               padding:14px 30px;
+                               text-decoration:none;
+                               border-radius:8px;
+                               font-size:16px;
+                               display:inline-block;">
+                                Open Timely
+                            </a>
+                        </div>
+                        <p style="font-size:15px; line-height:1.6;">
+                            If you have any questions or need assistance,
+                            feel free to contact our support team.
+                        </p>
+                        <p style="margin-top:30px;">
+                            Best regards,<br>
+                            <strong>The Timely Team</strong>
+                        </p>
+                    </td>
+                </tr>
+                <!-- Footer -->
+                <tr>
+                    <td align="center"
+                        style="background:#f8fafc; padding:20px; color:#64748b; font-size:13px;">
+                        <p style="margin:0;">
+                            © 2026 Timely. All rights reserved.
+                        </p>
+                        <p style="margin:8px 0 0;">
+                            Smart scheduling made simple.
+                        </p>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+</body>
+</html>"""
+        msg = MIMEText(body, 'html')
         msg['Subject'] = f"Welcome to Timely, {username}! 🎉"
         msg['From'] = f"{SMTP_CONFIG['from_name']} <{SMTP_CONFIG['from']}>"
         msg['To'] = to_email
