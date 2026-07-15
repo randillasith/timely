@@ -1,4 +1,4 @@
-import os, uuid, html, sqlite3, threading, requests, time, re, logging, secrets, json
+import os, uuid, html, sqlite3, threading, requests, time, re, logging, secrets, json, hmac
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request, session, jsonify, Response
 from flask_sqlalchemy import SQLAlchemy
@@ -298,6 +298,7 @@ def security_headers(response):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'"
     return response
 
 # ─── Validation Helpers ───
@@ -409,7 +410,7 @@ def bot_webhook():
     """Receives updates from Telegram bot."""
     # Verify the request is from Telegram
     token = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
-    if token != WEBHOOK_SECRET:
+    if not hmac.compare_digest(token, WEBHOOK_SECRET):
         return 'Unauthorized', 403
     update = request.get_json(force=True, silent=True)
     if not update: return 'ok', 200
@@ -685,7 +686,16 @@ def update_notify_settings():
         if len(chat_id) > 50:
             return jsonify({'error': 'Chat ID too long'}), 400
         user.telegram_chat_id = chat_id
-    if 'timezone' in data: user.timezone = data['timezone'].strip()[:50]
+    if 'timezone' in data:
+        tz = data['timezone'].strip()[:50]
+        if tz:
+            try:
+                from zoneinfo import available_timezones
+                if tz not in available_timezones():
+                    return jsonify({'error': f'Invalid timezone: {tz}'}), 400
+            except Exception:
+                pass  # fallback: skip validation if zoneinfo unavailable
+        user.timezone = tz
     db.session.commit()
     # If chat_id was just set, confirm connection with bot directly
     if user.telegram_chat_id and user.telegram_notify:
@@ -732,6 +742,7 @@ def get_categories():
     return jsonify([{'id':c.id,'name':c.name,'color':c.color,'icon':c.icon} for c in cats])
 
 @app.route('/api/categories', methods=['POST'])
+@limiter.limit("20 per minute")
 def create_category():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
@@ -750,6 +761,7 @@ def create_category():
     return jsonify({'id': cat.id, 'message': 'Created'}), 201
 
 @app.route('/api/categories/<int:cid>', methods=['PUT'])
+@limiter.limit("20 per minute")
 def update_category(cid):
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
@@ -772,6 +784,7 @@ def update_category(cid):
     return jsonify({'message': 'Updated'})
 
 @app.route('/api/categories/<int:cid>', methods=['DELETE'])
+@limiter.limit("20 per minute")
 def delete_category(cid):
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
@@ -828,6 +841,7 @@ def get_events():
     } for e in events])
 
 @app.route('/api/events', methods=['POST'])
+@limiter.limit("30 per minute")
 def create_event():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
@@ -863,6 +877,7 @@ def create_event():
     return jsonify({'id': event.id, 'message': 'Created'}), 201
 
 @app.route('/api/events/<int:eid>', methods=['PUT'])
+@limiter.limit("30 per minute")
 def update_event(eid):
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
@@ -899,6 +914,7 @@ def update_event(eid):
     return jsonify({'message': 'Updated'})
 
 @app.route('/api/events/<int:eid>', methods=['DELETE'])
+@limiter.limit("30 per minute")
 def delete_event(eid):
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
@@ -930,6 +946,7 @@ def export_json():
     })
 
 @app.route('/api/import', methods=['POST'])
+@limiter.limit("10 per minute")
 def import_json():
     user = login_required()
     if not user: return jsonify({'error': 'Not logged in'}), 401
@@ -1050,6 +1067,7 @@ def get_webhook(wid):
     })
 
 @app.route('/api/webhooks/<int:wid>', methods=['PUT'])
+@limiter.limit("20 per minute")
 def update_webhook(wid):
     """Update a webhook."""
     user = login_required()
@@ -1080,6 +1098,7 @@ def update_webhook(wid):
     return jsonify({'message': 'Webhook updated'})
 
 @app.route('/api/webhooks/<int:wid>', methods=['DELETE'])
+@limiter.limit("20 per minute")
 def delete_webhook(wid):
     """Delete a webhook and its logs."""
     user = login_required()
@@ -1471,8 +1490,18 @@ def admin_update_bot_settings():
 
     if not new_token:
         return jsonify({'error': 'Bot token required'}), 400
+    # Validate Telegram bot token format: digits:alphanumeric
+    if not re.match(r'^\d+:[\w-]+$', new_token):
+        return jsonify({'error': 'Invalid bot token format'}), 400
+    if len(new_token) > 60:
+        return jsonify({'error': 'Bot token too long'}), 400
     if not new_webhook:
         new_webhook = 'https://timely.randillasith.me/api/bot-webhook'
+    # Validate webhook URL
+    if new_webhook and not new_webhook.startswith('https://'):
+        return jsonify({'error': 'Webhook URL must use HTTPS'}), 400
+    if len(new_webhook) > 500:
+        return jsonify({'error': 'Webhook URL too long'}), 400
 
     # Update env.conf
     env_path = '/etc/systemd/system/timetable.service.d/env.conf'
@@ -1691,7 +1720,7 @@ def admin_broadcast_announcement(aid):
         try:
             r = requests.post(f'{TELEGRAM_API}/sendMessage', json={
                 'chat_id': u.telegram_chat_id,
-                'text': f'📢 <b>Announcement</b>\n\n{ann.message}',
+                'text': f'📢 <b>Announcement</b>\n\n{html.escape(ann.message)}',
                 'parse_mode': 'HTML',
             }, timeout=10)
             if r.ok: sent += 1
