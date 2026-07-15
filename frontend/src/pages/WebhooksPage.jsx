@@ -197,10 +197,8 @@ function Dashboard({ webhooks, onEdit, onToggle, onDelete, onTest, onLogs, onCre
                 <div className="webhook-url"><strong>URL:</strong> <code>{wh.target_url}</code></div>
                 <div className="webhook-secret">
                   <strong>Secret:</strong>
-                  <code className="secret-text" onClick={() => setShowSecret(s => ({...s, [wh.id]: !s[wh.id]}))}>
-                    {showSecret[wh.id] ? wh.secret_key : '••••••••' + wh.secret_key.slice(-4)}
-                  </code>
-                  <button className="btn btn-sm" onClick={() => { navigator.clipboard.writeText(wh.secret_key); }} title="Copy secret">📋</button>
+                  <code className="secret-text">{wh.secret_key_masked || '••••••••'}</code>
+                  <button className="btn btn-sm" title="Full key shown only at creation — save it then">ⓘ</button>
                 </div>
                 <div className="webhook-events">
                   {(wh.subscribed_events || []).map(ev => (

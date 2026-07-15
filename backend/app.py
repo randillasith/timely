@@ -1011,7 +1011,9 @@ def list_webhooks():
     return jsonify([{
         'id': w.id, 'name': w.name, 'target_url': w.target_url,
         'subscribed_events': json.loads(w.subscribed_events) if isinstance(w.subscribed_events, str) else w.subscribed_events,
-        'secret_key': w.secret_key, 'active': w.active,
+        'secret_key_masked': w.secret_key[:8] + '...' + w.secret_key[-4:] if w.secret_key else '',
+        'secret_key': '',  # not exposed on list — only on creation
+        'active': w.active,
         'created_at': w.created_at.isoformat() if w.created_at else None,
         'updated_at': w.updated_at.isoformat() if w.updated_at else None,
     } for w in whs])
@@ -1061,7 +1063,9 @@ def get_webhook(wid):
     return jsonify({
         'id': wh.id, 'name': wh.name, 'target_url': wh.target_url,
         'subscribed_events': json.loads(wh.subscribed_events) if isinstance(wh.subscribed_events, str) else wh.subscribed_events,
-        'secret_key': wh.secret_key, 'active': wh.active,
+        'secret_key_masked': wh.secret_key[:8] + '...' + wh.secret_key[-4:] if wh.secret_key else '',
+        'secret_key': '',  # not exposed on detail — only on creation
+        'active': wh.active,
         'created_at': wh.created_at.isoformat() if wh.created_at else None,
         'updated_at': wh.updated_at.isoformat() if wh.updated_at else None,
     })
