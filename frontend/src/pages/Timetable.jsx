@@ -70,6 +70,35 @@ export default function Timetable() {
     if (modal?.event) { await deleteEvent(modal.event.id); setModal(null); load(); }
   };
 
+  // ─── One-off change: create override + skip date on original ───
+  const handleOneOffChange = async (originalEvent, { day, start, end, date }) => {
+    // Create a copy of the event with new times for this specific week
+    const cloneData = {
+      title: originalEvent.title,
+      day,
+      start,
+      end,
+      category: originalEvent.category,
+      color: originalEvent.color || undefined,
+      note: originalEvent.note || '',
+      repeat: 'none',
+      location: originalEvent.location || '',
+      semester: originalEvent.semester || '',
+      notify_before: originalEvent.notify_before,
+    };
+    try {
+      await createEvent(cloneData);
+      // Add this date to original event's skip_dates
+      const skipDates = [...(originalEvent.skip_dates || []), date];
+      await updateEvent(originalEvent.id, { skip_dates: skipDates });
+      load();
+      return true;
+    } catch (err) {
+      console.error('One-off change failed:', err);
+      return false;
+    }
+  };
+
   const handleTheme = async t => { setTheme(t); await apiSetTheme(t).catch(() => {}); };
 
   const handleAddCategory = async (name, color, icon) => { await createCategory({ name, color, icon }); load(); };
@@ -129,6 +158,7 @@ export default function Timetable() {
           timezone={timezone}
           onSlotClick={(day, hour) => setModal({ day, hour })}
           onEventClick={ev => setModal({ event: ev })}
+          onOneOffChange={handleOneOffChange}
         />
       ) : (
         <div className="agenda-container">

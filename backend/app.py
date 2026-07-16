@@ -105,6 +105,7 @@ class Event(db.Model):
     notified = db.Column(db.Boolean, default=False)
     semester = db.Column(db.String(50), default='')
     location = db.Column(db.String(100), default='')
+    skip_dates = db.Column(db.Text, default='[]')  # JSON array of "YYYY-MM-DD"
 
 class Webhook(db.Model):
     __tablename__ = 'webhooks'
@@ -176,6 +177,7 @@ def migrate_db():
             ('notified', 'BOOLEAN', '0'),
             ('semester', 'VARCHAR(50)', "''"),
             ('location', 'VARCHAR(100)', "''"),
+            ('skip_dates', 'TEXT', "'[]'"),
         ],
         'categories': [
             ('color', 'VARCHAR(7)', "'#c4956a'"),
@@ -838,6 +840,7 @@ def get_events():
         'category':e.category,'color':e.color,'note':e.note,'repeat':e.repeat,
         'notify_before':e.notify_before, 'semester':e.semester or '',
         'location':e.location or '',
+        'skip_dates': json.loads(e.skip_dates) if e.skip_dates else [],
     } for e in events])
 
 @app.route('/api/events', methods=['POST'])
@@ -861,6 +864,7 @@ def create_event():
         notify_before=data.get('notify_before'),
         semester=data.get('semester','')[:50],
         location=data.get('location','')[:100],
+        skip_dates=json.dumps(data.get('skip_dates', [])),
     )
     db.session.add(event)
     db.session.commit()
@@ -898,6 +902,7 @@ def update_event(eid):
     if 'notify_before' in data: event.notify_before = data.get('notify_before')
     if 'semester' in data: event.semester = data['semester'][:50]
     if 'location' in data: event.location = data['location'][:100]
+    if 'skip_dates' in data: event.skip_dates = json.dumps(data['skip_dates'])
     db.session.commit()
     event_type = 'event.updated'
     if event.category in ('task', 'study') and event.repeat == 'none':
